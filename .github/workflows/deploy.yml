@@ -25,53 +25,136 @@ jobs:
         SERVER_USER: ${{ secrets.SERVER_USER }}
         SSH_PORT: ${{ secrets.SSH_PORT }}
       run: |
+        set -e
+        
+        echo "🚀 开始部署..."
+        
         # 设置SSH
+        echo "🔑 设置SSH连接..."
         mkdir -p ~/.ssh
         echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan -p ${SSH_PORT:-22} $SERVER_HOST >> ~/.ssh/known_hosts
+        
+        # 设置SSH端口
+        SSH_PORT=${SSH_PORT:-22}
+        echo "📡 SSH端口: $SSH_PORT"
+        
+        # 添加服务器到known_hosts
+        ssh-keyscan -p $SSH_PORT $SERVER_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+        
+        # 测试SSH连接
+        echo "🧪 测试SSH连接..."
+        if ! ssh -p $SSH_PORT -o ConnectTimeout=10 $SERVER_USER@$SERVER_HOST "echo 'SSH连接成功'"; then
+          echo "❌ SSH连接失败"
+          exit 1
+        fi
         
         # 打包代码
-        tar -czf app.tar.gz --exclude='.git' --exclude='venv' --exclude='__pycache__' .
+        echo "📦 打包代码..."
+        tar -czf app.tar.gz --exclude='.git' --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' .
         
-        # 上传并部署
-        scp -P ${SSH_PORT:-22} app.tar.gz $SERVER_USER@$SERVER_HOST:/tmp/
-        ssh -p ${SSH_PORT:-22} $SERVER_USER@$SERVER_HOST << 'EOF'
-          # 部署代码
-          sudo mkdir -p /var/www/app
-          sudo chown $USER:$USER /var/www/app
-          cd /var/www/app
-          
-          # 备份旧版本
-          [ -d "current" ] && mv current backup-$(date +%Y%m%d-%H%M%S)
-          
-          # 解压新代码
-          mkdir current
-          tar -xzf /tmp/app.tar.gz -C current
-          cd current
-          
-          # 安装依赖
-          python3 -m venv venv
-          source venv/bin/activate
+        # 上传代码
+        echo "📤 上传代码到服务器..."
+        scp -P $SSH_PORT app.tar.gz $SERVER_USER@$SERVER_HOST:/tmp/
+        
+        # 执行远程部署
+        echo "🎯 执行远程部署..."
+        ssh -p $SSH_PORT $SERVER_USER@$SERVER_HOST "
+        set -e
+        
+        echo '🔧 开始服务器端部署...'
+        
+        # 设置环境变量
+        export FEISHU_APP_ID='$FEISHU_APP_ID'
+        export FEISHU_APP_SECRET='$FEISHU_APP_SECRET'
+        export FEISHU_VERIFICATION_TOKEN='$FEISHU_VERIFICATION_TOKEN'
+        export GEMINI_API_KEY='$GEMINI_API_KEY'
+        export FIGMA_ACCESS_TOKEN='$FIGMA_ACCESS_TOKEN'
+        
+        # 部署代码
+        echo '📁 准备应用目录...'
+        sudo mkdir -p /var/www/app
+        sudo chown \$USER:\$USER /var/www/app
+        cd /var/www/app
+        
+        # 备份旧版本
+        if [ -d 'current' ]; then
+          echo '📦 备份旧版本...'
+          mv current backup-\$(date +%Y%m%d-%H%M%S)
+        fi
+        
+        # 解压新代码
+        echo '📂 解压新代码...'
+        mkdir current
+        tar -xzf /tmp/app.tar.gz -C current
+        cd current
+        
+        # 检查Python环境
+        echo '🐍 检查Python环境...'
+        python3 --version
+        
+        # 创建虚拟环境
+        echo '🔨 创建虚拟环境...'
+        python3 -m venv venv
+        source venv/bin/activate
+        
+        # 升级pip
+        pip install --upgrade pip
+        
+        # 安装依赖
+        echo '📚 安装依赖...'
+        if [ -f 'requirements.txt' ]; then
           pip install -r requirements.txt
-          
-          # 创建环境变量文件
-          cat > .env << 'ENV'
-        FEISHU_APP_ID=$FEISHU_APP_ID
-        FEISHU_APP_SECRET=$FEISHU_APP_SECRET
-        FEISHU_VERIFICATION_TOKEN=$FEISHU_VERIFICATION_TOKEN
-        GEMINI_API_KEY=$GEMINI_API_KEY
-        FIGMA_ACCESS_TOKEN=$FIGMA_ACCESS_TOKEN
+        else
+          echo '⚠️ 未找到requirements.txt文件'
+        fi
+        
+        # 创建环境变量文件
+        echo '⚙️ 创建环境配置...'
+        cat > .env << 'ENVFILE'
+        FEISHU_APP_ID=\$FEISHU_APP_ID
+        FEISHU_APP_SECRET=\$FEISHU_APP_SECRET
+        FEISHU_VERIFICATION_TOKEN=\$FEISHU_VERIFICATION_TOKEN
+        GEMINI_API_KEY=\$GEMINI_API_KEY
+        FIGMA_ACCESS_TOKEN=\$FIGMA_ACCESS_TOKEN
         ENVIRONMENT=production
-        ENV
-          
-          # PM2 部署
-          pm2 delete product-auto-test 2>/dev/null || true
-          pm2 start api_server.py --name product-auto-test --interpreter $(pwd)/venv/bin/python
-          pm2 save
-          
-          # 清理临时文件
-          rm /tmp/app.tar.gz
-          
-          echo "✅ 部署完成！"
-        EOF 
+        ENVFILE
+        
+        # 检查主文件
+        if [ ! -f 'api_server.py' ]; then
+          echo '❌ api_server.py 文件不存在'
+          ls -la
+          exit 1
+        fi
+        
+        # 安装或检查PM2
+        echo '🚀 配置PM2...'
+        if ! command -v pm2 &> /dev/null; then
+          echo '安装PM2...'
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+          export NVM_DIR='\$HOME/.nvm'
+          [ -s '\$NVM_DIR/nvm.sh' ] && \. '\$NVM_DIR/nvm.sh'
+          nvm install node
+          npm install -g pm2
+        fi
+        
+        # PM2 部署
+        echo '🔄 重启PM2服务...'
+        pm2 delete product-auto-test 2>/dev/null || true
+        pm2 start api_server.py --name product-auto-test --interpreter \$(pwd)/venv/bin/python
+        pm2 save
+        
+        # 验证服务
+        echo '🔍 验证服务状态...'
+        sleep 3
+        pm2 status
+        
+        # 清理临时文件
+        rm /tmp/app.tar.gz
+        
+        echo '✅ 部署完成！'
+        echo '📁 项目路径: '\$(pwd)
+        echo '🔍 服务状态: '\$(pm2 list | grep product-auto-test || echo '未找到服务')
+        "
+        
+        echo "🎉 部署流程完成！" 
