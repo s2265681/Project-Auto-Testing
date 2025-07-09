@@ -44,11 +44,33 @@ jobs:
           echo '✅ 代码下载完成'
           
           # 创建Python虚拟环境
+          echo '开始创建虚拟环境...'
           python3 -m venv venv
+          echo '虚拟环境创建命令执行完成，检查结果...'
+          ls -la venv/
+          echo '检查venv/bin目录内容:'
+          ls -la venv/bin/
           echo '✅ 虚拟环境创建完成'
+          
+          # 查找正确的Python路径
+          if [ -f 'venv/bin/python3' ]; then
+            PYTHON_PATH='venv/bin/python3'
+            echo '✅ 找到Python路径: venv/bin/python3'
+          elif [ -f 'venv/bin/python' ]; then
+            PYTHON_PATH='venv/bin/python'
+            echo '✅ 找到Python路径: venv/bin/python'
+          else
+            echo '❌ 未找到Python可执行文件'
+            echo 'venv/bin目录内容:'
+            ls -la venv/bin/
+            exit 1
+          fi
           
           # 激活虚拟环境并安装依赖
           source venv/bin/activate
+          echo '虚拟环境激活成功'
+          which python
+          python --version
           pip install -r requirements.txt --quiet
           echo '✅ Python依赖安装完成'
           
@@ -73,19 +95,9 @@ jobs:
             echo '✅ PM2已存在'
           fi
           
-          # 检查虚拟环境
-          if [ -f './venv/bin/python' ]; then
-            echo '✅ 虚拟环境Python路径存在'
-            ./venv/bin/python --version
-          else
-            echo '❌ 虚拟环境Python路径不存在'
-            ls -la venv/bin/
-            exit 1
-          fi
-          
           # 重启服务
           pm2 delete product-auto-test 2>/dev/null || true
-          pm2 start api_server.py --name product-auto-test --interpreter ./venv/bin/python
+          pm2 start api_server.py --name product-auto-test --interpreter \$PYTHON_PATH
           pm2 save
           echo '✅ PM2服务启动完成'
           
