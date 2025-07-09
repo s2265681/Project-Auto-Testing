@@ -15,6 +15,25 @@ from ..visual_comparison.comparator import VisualComparator
 
 logger = get_logger(__name__)
 
+def get_image_url(file_path, base_url="http://localhost:5001"):
+    """
+    获取图片的可访问URL
+    Get accessible URL for image files
+    """
+    if not file_path or not os.path.exists(file_path):
+        return None
+    
+    # 获取相对于项目根目录的路径
+    project_root = os.getcwd()
+    try:
+        rel_path = os.path.relpath(file_path, project_root)
+        # 将Windows路径分隔符转换为URL格式
+        url_path = rel_path.replace('\\', '/')
+        return f"{base_url.rstrip('/')}/files/{url_path}"
+    except Exception as e:
+        logger.warning(f"路径转换失败: {e}")
+        return None
+
 class WorkflowExecutor:
     """工作流执行器 Workflow Executor"""
     
@@ -33,32 +52,35 @@ class WorkflowExecutor:
                            prd_document_token: str,
                            figma_url: str,
                            website_url: str,
-                           website_classes: str = None,
+                           xpath_selector: str = None,  # 改为XPath选择器
                            device: str = "desktop",
-                           output_dir: str = "reports") -> Dict[str, Any]:
+                           output_dir: str = "reports",
+                           test_type: str = "完整测试") -> Dict[str, Any]:
         """
-        执行按钮点击的完整工作流
-        Execute complete workflow for button click
+        执行飞书多维表格按钮点击的工作流
+        Execute workflow for Feishu multidimensional table button click
         
         Args:
-            app_token: 多维表格应用token bitable app token
+            app_token: 应用token app token
             table_id: 数据表ID table ID  
             record_id: 记录ID record ID
             prd_document_token: PRD文档token PRD document token
             figma_url: Figma设计稿URL Figma design URL
             website_url: 网站URL website URL
-            website_classes: 网站CSS类名 website CSS classes (optional)
+            xpath_selector: XPath选择器 XPath selector (optional)
             device: 设备类型 device type
             output_dir: 输出目录 output directory
+            test_type: 测试类型 test type ("功能测试", "UI测试", "完整测试")
             
         Returns:
             执行结果 execution result
         """
-        logger.info("开始执行工作流 / Starting workflow execution")
+        logger.info(f"开始执行工作流 / Starting workflow execution - 测试类型: {test_type}")
         
         result = {
             "status": "success",
             "timestamp": int(time.time()),
+            "test_type": test_type,
             "test_cases": None,
             "comparison_result": None,
             "bitable_updates": {},
@@ -66,42 +88,87 @@ class WorkflowExecutor:
         }
         
         try:
-            # 步骤1: 解析PRD文档生成测试用例
-            logger.info("步骤1: 解析PRD文档并生成测试用例")
-            test_cases = self._generate_test_cases_from_prd(prd_document_token)
-            result["test_cases"] = test_cases
+            # 步骤0: 更新状态为"进行中"
+            logger.info("步骤0: 更新执行状态为进行中")
+            self._update_execution_status(app_token, table_id, record_id, "进行中")
+            result["status_updates"] = ["进行中"]
+            test_cases = None
+            comparison_result = None
             
-            # 步骤2: 比较Figma设计和网站
-            logger.info("步骤2: 比较Figma设计和网站")
-            comparison_result = self._compare_figma_and_website(
-                figma_url, website_url, website_classes, device, output_dir
-            )
-            result["comparison_result"] = comparison_result
+            # 根据测试类型执行不同的步骤
+            if test_type == "功能测试":
+                # 只执行PRD解析和测试用例生成
+                logger.info("执行功能测试: 解析PRD文档并生成测试用例")
+                test_cases = self._generate_test_cases_from_prd(prd_document_token)
+                result["test_cases"] = test_cases
+                logger.info("功能测试完成，跳过视觉比较")
+                
+            elif test_type == "UI测试":
+                # 只执行Figma与网站的视觉比较
+                logger.info("执行UI测试: 比较Figma设计和网站")
+                comparison_result = self._compare_figma_and_website(
+                    figma_url, website_url, xpath_selector, device, output_dir
+                )
+                result["comparison_result"] = comparison_result
+                logger.info("UI测试完成，跳过PRD解析")
+                
+            else:
+                # 默认执行完整测试（兼容原有行为）
+                logger.info("执行完整测试: PRD解析 + 视觉比较")
+                
+                # 步骤1: 解析PRD文档生成测试用例
+                logger.info("步骤1: 解析PRD文档并生成测试用例")
+                test_cases = self._generate_test_cases_from_prd(prd_document_token)
+                result["test_cases"] = test_cases
+                
+                # 步骤2: 比较Figma设计和网站
+                logger.info("步骤2: 比较Figma设计和网站")
+                comparison_result = self._compare_figma_and_website(
+                    figma_url, website_url, xpath_selector, device, output_dir
+                )
+                result["comparison_result"] = comparison_result
             
-            # 步骤3: 更新多维表格
+            # 步骤3: 更新多维表格（所有测试类型都需要更新）
             logger.info("步骤3: 更新多维表格")
             bitable_updates = self._update_bitable_record(
                 app_token, table_id, record_id, test_cases, comparison_result
             )
             result["bitable_updates"] = bitable_updates
             
-            logger.info("工作流执行完成 / Workflow execution completed")
+            # 步骤4: 更新状态为"已完成"
+            logger.info("步骤4: 更新执行状态为已完成")
+            self._update_execution_status(app_token, table_id, record_id, "已完成")
+            result["status_updates"].append("已完成")
+            
+            logger.info(f"工作流执行完成 / Workflow execution completed - 测试类型: {test_type}")
             return result
             
         except Exception as e:
             logger.error(f"工作流执行失败: {e}")
+            
+            # 更新状态为"失败"
+            try:
+                logger.info("更新执行状态为失败")
+                self._update_execution_status(app_token, table_id, record_id, "失败")
+                result["status_updates"] = result.get("status_updates", []) + ["失败"]
+            except Exception as status_error:
+                logger.error(f"更新失败状态时出错: {status_error}")
+                
             result["status"] = "error"
             result["errors"].append(str(e))
             return result
     
-    def _generate_test_cases_from_prd(self, document_token: str) -> Dict[str, Any]:
+    def _generate_test_cases_from_prd(self, document_input: str) -> Dict[str, Any]:
         """
-        从PRD文档生成测试用例
-        Generate test cases from PRD document
+        从PRD文档生成测试用例 (支持完整链接或token)
+        Generate test cases from PRD document (supports full URL or token)
+        
+        Args:
+            document_input: 文档链接或token (document URL or token)
         """
         try:
-            # 解析PRD文档
-            prd_result = self.feishu_client.parse_prd_document(document_token)
+            # 解析PRD文档 (新方法自动处理完整链接或token)
+            prd_result = self.feishu_client.parse_prd_document(document_input)
             prd_text = prd_result['text_content']
             
             # 使用AI生成测试用例
@@ -109,7 +176,7 @@ class WorkflowExecutor:
                 test_cases_text = self.gemini_generator.generate_test_cases(prd_text, case_count=10)
                 
                 return {
-                    "document_token": document_token,
+                    "document_input": document_input,
                     "prd_text_length": len(prd_text),
                     "test_cases_text": test_cases_text,
                     "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -129,7 +196,7 @@ class WorkflowExecutor:
 
 ## 详细说明
 - **时间**: {time.strftime("%Y-%m-%d %H:%M:%S")}
-- **PRD文档**: {document_token}
+- **PRD文档**: {document_input}
 - **PRD文本长度**: {len(prd_text)} 字符
 - **错误类型**: API服务不可用
 
@@ -154,7 +221,7 @@ class WorkflowExecutor:
 """
                 
                 return {
-                    "document_token": document_token,
+                    "document_input": document_input,
                     "prd_text_length": len(prd_text),
                     "test_cases_text": error_report,
                     "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -169,7 +236,7 @@ class WorkflowExecutor:
     def _compare_figma_and_website(self, 
                                  figma_url: str, 
                                  website_url: str, 
-                                 website_classes: str = None,
+                                 xpath_selector: str = None,  # 改为XPath选择器
                                  device: str = "desktop",
                                  output_dir: str = "reports") -> Dict[str, Any]:
         """
@@ -185,30 +252,34 @@ class WorkflowExecutor:
             # 1. 网页截图
             website_screenshot_path = os.path.join(current_output_dir, f"website_{device}.png")
             
-            if website_classes:
-                # 按CSS类截图
-                self.screenshot_capture.capture_by_classes(
+            if xpath_selector:
+                # 按XPath截图
+                logger.info(f"使用XPath截图: {xpath_selector}")
+                self.screenshot_capture.capture_by_xpath(
                     url=website_url,
-                    classes=website_classes,
+                    xpath=xpath_selector,
                     output_dir=current_output_dir,
-                    element_index=0,
                     device=device,
-                    wait_time=5
+                    wait_time=8  # 增加等待时间确保样式完全加载
                 )
-                # 重命名文件
-                class_filename = self.screenshot_capture.build_filename_from_classes(
-                    website_classes, 0, device, website_url
+                # 重命名文件为标准格式
+                xpath_filename = self.screenshot_capture.build_filename_from_xpath(
+                    xpath_selector, device, website_url
                 )
-                original_path = os.path.join(current_output_dir, class_filename)
+                original_path = os.path.join(current_output_dir, xpath_filename)
                 if os.path.exists(original_path):
                     os.rename(original_path, website_screenshot_path)
+                    logger.info(f"XPath截图已保存: {website_screenshot_path}")
+                else:
+                    logger.warning(f"XPath截图文件未找到: {original_path}")
             else:
                 # 全页截图
+                logger.info("使用全页截图")
                 self.screenshot_capture.capture_full_page(
                     url=website_url,
                     output_path=website_screenshot_path,
                     device=device,
-                    wait_time=5
+                    wait_time=8  # 增加等待时间确保样式完全加载
                 )
             
             # 2. Figma截图
@@ -287,7 +358,7 @@ class WorkflowExecutor:
             return {
                 "figma_url": figma_url,
                 "website_url": website_url,
-                "website_classes": website_classes,
+                "xpath_selector": xpath_selector,  # XPath选择器
                 "device": device,
                 "output_directory": current_output_dir,
                 "website_screenshot": website_screenshot_path,
@@ -322,17 +393,26 @@ class WorkflowExecutor:
             # 准备更新字段
             update_fields = {}
             
-            # 更新测试用例文档栏
-            if test_cases and test_cases.get('test_cases_text'):
-                update_fields['测试用例文档'] = test_cases['test_cases_text']
+            # 根据有无数据来判断执行的测试类型
+            test_type_executed = []
             
-            # 更新网站相似度报告栏
+            # 更新测试用例栏（功能测试结果）
+            if test_cases and test_cases.get('test_cases_text'):
+                update_fields['测试用例'] = test_cases['test_cases_text']
+                test_type_executed.append("功能测试")
+            
+            # 更新网站相似度报告栏（UI测试结果）
             if comparison_result:
                 similarity_report = self._format_similarity_report(comparison_result)
                 update_fields['网站相似度报告'] = similarity_report
+                test_type_executed.append("UI测试")
             
-            # 更新执行状态
-            update_fields['执行结果'] = "已完成"
+            # 更新执行状态，显示具体执行的测试类型
+            if test_type_executed:
+                executed_types = " + ".join(test_type_executed)
+                update_fields['执行结果'] = f"已完成({executed_types})"
+            else:
+                update_fields['执行结果'] = "已完成"
             
             # 执行更新
             updated_record = self.feishu_client.update_bitable_record(
@@ -354,6 +434,52 @@ class WorkflowExecutor:
         except Exception as e:
             logger.error(f"更新多维表格失败: {e}")
             raise
+    
+    def _update_execution_status(self, app_token: str, table_id: str, record_id: str, status: str) -> Dict[str, Any]:
+        """
+        更新执行状态
+        Update execution status
+        
+        Args:
+            app_token: 应用token
+            table_id: 数据表ID
+            record_id: 记录ID
+            status: 状态值 ("未开始", "进行中", "已完成", "失败")
+            
+        Returns:
+            更新结果
+        """
+        try:
+            logger.info(f"正在更新执行状态为: {status}")
+            
+            # 准备状态更新字段
+            status_fields = {
+                '执行状态': status
+            }
+            
+            # 执行状态更新
+            updated_record = self.feishu_client.update_bitable_record(
+                app_token=app_token,
+                table_id=table_id,
+                record_id=record_id,
+                fields=status_fields
+            )
+            
+            logger.info(f"执行状态更新成功: {status}")
+            
+            return {
+                "app_token": app_token,
+                "table_id": table_id,
+                "record_id": record_id,
+                "status": status,
+                "update_result": updated_record,
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+        except Exception as e:
+            logger.error(f"更新执行状态失败: {e}")
+            # 状态更新失败不应该中断主流程，只记录错误
+            raise Exception(f"状态更新失败: {e}")
     
     def _format_similarity_report(self, comparison_result: Dict[str, Any]) -> str:
         """
@@ -406,11 +532,20 @@ class WorkflowExecutor:
 - **差异区域面积**: {total_diff_area} 像素
 - **颜色差异**: 最大差异 {color_analysis.get('max_color_diff', 0):.2f}"""
 
+        # 获取图片URL
+        figma_image_url = get_image_url(comparison_result.get('figma_screenshot'))
+        website_image_url = get_image_url(comparison_result.get('website_screenshot'))
+        diff_image_url = get_image_url(comp_data.get('diff_image_path'))
+
         report += f"""
+
+## 对比图片
+- **Figma设计稿**: {figma_image_url or '无法访问'}
+- **网站截图**: {website_image_url or '无法访问'}
+- **差异对比图**: {diff_image_url or '无法访问'}
 
 ## 文件路径
 - **输出目录**: {comparison_result.get('output_directory', 'N/A')}
-- **差异对比图**: {comp_data.get('diff_image_path', 'N/A')}
 - **详细报告**: {comparison_result.get('report_path', 'N/A')}"""
 
         # 添加AI建议部分
@@ -454,6 +589,25 @@ class WorkflowExecutor:
             return "实现效果较差，与设计存在明显差异，需要重点调整。"
         else:
             return "实现效果很差，与设计差异极大，建议重新实现。"
+    
+    def reset_execution_status_to_default(self, app_token: str, table_id: str, record_id: str) -> Dict[str, Any]:
+        """
+        重置执行状态为默认值"未开始"
+        Reset execution status to default value "未开始"
+        
+        Args:
+            app_token: 应用token
+            table_id: 数据表ID
+            record_id: 记录ID
+            
+        Returns:
+            更新结果
+        """
+        try:
+            return self._update_execution_status(app_token, table_id, record_id, "未开始")
+        except Exception as e:
+            logger.error(f"重置执行状态失败: {e}")
+            raise
     
     def get_bitable_structure(self, app_token: str, table_id: str) -> Dict[str, Any]:
         """

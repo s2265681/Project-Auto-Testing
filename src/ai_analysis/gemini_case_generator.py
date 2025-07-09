@@ -3,15 +3,12 @@ Gemini测试用例生成模块
 Gemini Test Case Generator Module
 """
 import os
-import signal
+import concurrent.futures
 import google.generativeai as genai
 from typing import List, Dict
 
 class TimeoutError(Exception):
     pass
-
-def timeout_handler(signum, frame):
-    raise TimeoutError("API调用超时")
 
 class GeminiCaseGenerator:
     def __init__(self, api_key: str = None):
@@ -46,6 +43,17 @@ class GeminiCaseGenerator:
         if not self.model:
             raise Exception("无法初始化任何Gemini模型")
 
+    def _call_gemini_api(self, prompt: str):
+        """调用Gemini API的内部方法"""
+        response = self.model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=2048,
+                temperature=0.7,
+            )
+        )
+        return response.text
+
     def generate_test_cases(self, prd_text: str, case_count: int = 5) -> str:
         """
         根据PRD文本生成测试用例
@@ -70,31 +78,22 @@ PRD内容：
         try:
             print("🤖 正在调用Gemini API生成测试用例...")
             
-            # 设置信号处理器，30秒超时
-            signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(30)  # 30秒超时
-            
-            response = self.model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=2048,
-                    temperature=0.7,
-                )
-            )
-            
-            # 取消超时
-            signal.alarm(0)
-            
-            print("✅ Gemini API调用成功")
-            return response.text
+            # 使用ThreadPoolExecutor实现超时
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(self._call_gemini_api, prompt)
+                try:
+                    result = future.result(timeout=50)  # 50秒超时
+                    print("✅ Gemini API调用成功")
+                    return result
+                except concurrent.futures.TimeoutError:
+                    print("⚠️  Gemini API调用超时")
+                    raise TimeoutError("Gemini API调用超时，请检查网络连接或稍后重试")
             
         except TimeoutError:
             print("⚠️  Gemini API调用超时")
-            signal.alarm(0)  # 确保取消超时
             raise TimeoutError("Gemini API调用超时，请检查网络连接或稍后重试")
         except Exception as e:
             print(f"⚠️  Gemini API调用失败: {e}")
-            signal.alarm(0)  # 确保取消超时
             # 重新抛出异常，让调用者处理
             raise e
 

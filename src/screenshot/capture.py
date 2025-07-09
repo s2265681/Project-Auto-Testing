@@ -46,7 +46,7 @@ class ScreenshotCapture:
         self.language = language
         self.driver = None
         
-    def _setup_driver(self, device_size: Tuple[int, int] = None):
+    def _setup_driver(self, device_size: Tuple[int, int] = None, device_type: str = 'desktop'):
         """设置浏览器驱动"""
         try:
             if self.browser.lower() == 'chrome':
@@ -65,7 +65,20 @@ class ScreenshotCapture:
                         'intl.accept_languages': self.language
                     })
                 
-                if device_size:
+                # 为移动设备设置设备仿真
+                if device_type == 'mobile':
+                    # 设置移动设备仿真（iPhone 6）
+                    mobile_emulation = {
+                        "deviceMetrics": {
+                            "width": 375,
+                            "height": 667,
+                            "pixelRatio": 2.0
+                        },
+                        "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1"
+                    }
+                    options.add_experimental_option("mobileEmulation", mobile_emulation)
+                    logger.info("设置移动设备仿真: iPhone 6")
+                elif device_size:
                     options.add_argument(f'--window-size={device_size[0]},{device_size[1]}')
                 
                 self.driver = webdriver.Chrome(options=options)
@@ -84,69 +97,219 @@ class ScreenshotCapture:
             else:
                 raise ValueError(f"不支持的浏览器类型: {self.browser}")
             
-            if device_size:
+            # 为非移动设备设置窗口尺寸
+            if device_type != 'mobile' and device_size:
                 self.driver.set_window_size(device_size[0], device_size[1])
                 
-            logger.info(f"浏览器驱动设置成功: {self.browser}, 语言: {self.language}")
+            logger.info(f"浏览器驱动设置成功: {self.browser}, 设备类型: {device_type}, 语言: {self.language}")
             
         except Exception as e:
             logger.error(f"浏览器驱动设置失败: {e}")
             raise
     
     def _set_language(self):
-        """设置浏览器localStorage中的语言并刷新页面"""
+        """设置浏览器语言偏好"""
         try:
-            if self.language:
-                current_url = self.driver.current_url
+            if self.language == 'zh-CN':
+                # 设置中文语言
+                self.driver.execute_script("""
+                    Object.defineProperty(navigator, 'language', {
+                        get: function() { return 'zh-CN'; }
+                    });
+                    Object.defineProperty(navigator, 'languages', {
+                        get: function() { return ['zh-CN', 'zh', 'en']; }
+                    });
+                """)
                 
-                # 设置localStorage中的语言相关项
-                language_settings = [
-                    ('language', self.language),
-                    ('locale', self.language),
-                    ('lang', self.language),
-                    ('i18nextLng', self.language.split('-')[0]),  # for i18next
-                    ('preferred_language', self.language),
-                    ('ui_language', self.language)
-                ]
+                # 设置Accept-Language头
+                self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                    "userAgent": self.driver.execute_script("return navigator.userAgent"),
+                    "acceptLanguage": "zh-CN,zh;q=0.9,en;q=0.8"
+                })
+            elif self.language == 'en-US':
+                # 设置英文语言
+                self.driver.execute_script("""
+                    Object.defineProperty(navigator, 'language', {
+                        get: function() { return 'en-US'; }
+                    });
+                    Object.defineProperty(navigator, 'languages', {
+                        get: function() { return ['en-US', 'en']; }
+                    });
+                """)
                 
-                for key, value in language_settings:
-                    self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+                # 设置Accept-Language头
+                self.driver.execute_cdp_cmd('Network.setUserAgentOverride', {
+                    "userAgent": self.driver.execute_script("return navigator.userAgent"),
+                    "acceptLanguage": "en-US,en;q=0.9"
+                })
                 
-                # 刷新页面使语言设置生效
-                self.driver.refresh()
-                
-                # 等待页面重新加载
-                WebDriverWait(self.driver, 10).until(
-                    lambda driver: driver.execute_script("return document.readyState") == "complete"
-                )
-                
-                logger.info(f"设置浏览器语言为: {self.language} 并刷新页面")
         except Exception as e:
             logger.warning(f"设置语言失败: {e}")
+
+    def _wait_for_page_fully_loaded(self):
+        """等待页面完全加载，包括CSS和JavaScript"""
+        try:
+            # 等待所有网络请求完成
+            WebDriverWait(self.driver, 15).until(
+                lambda driver: driver.execute_script("""
+                    return (typeof window.performance !== 'undefined' && 
+                            window.performance.timing.loadEventEnd > 0) ||
+                           document.readyState === 'complete';
+                """)
+            )
+            
+            # 等待所有图片加载完成
+            self.driver.execute_script("""
+                return new Promise((resolve) => {
+                    const images = document.querySelectorAll('img');
+                    let loadedCount = 0;
+                    const totalImages = images.length;
+                    
+                    if (totalImages === 0) {
+                        resolve();
+                        return;
+                    }
+                    
+                    images.forEach(img => {
+                        if (img.complete) {
+                            loadedCount++;
+                        } else {
+                            img.onload = img.onerror = () => {
+                                loadedCount++;
+                                if (loadedCount === totalImages) {
+                                    resolve();
+                                }
+                            };
+                        }
+                    });
+                    
+                    if (loadedCount === totalImages) {
+                        resolve();
+                    }
+                });
+            """)
+            
+            # 等待CSS样式表加载完成
+            self.driver.execute_script("""
+                return new Promise((resolve) => {
+                    const styleSheets = document.styleSheets;
+                    for (let i = 0; i < styleSheets.length; i++) {
+                        try {
+                            // 尝试访问CSS规则来确保样式表已加载
+                            styleSheets[i].cssRules;
+                        } catch (e) {
+                            // 样式表可能还在加载中
+                            setTimeout(resolve, 1000);
+                            return;
+                        }
+                    }
+                    resolve();
+                });
+            """)
+            
+            # 等待可能的动态内容加载
+            time.sleep(1)
+            
+            logger.debug("页面完全加载完成")
+            
+        except Exception as e:
+            logger.warning(f"等待页面完全加载失败: {e}")
+            # 如果检测失败，至少等待一段时间
+            time.sleep(3)
+
+    def _parse_url_with_xpath(self, url_input: str) -> tuple[str, str]:
+        """
+        解析URL输入，检查是否包含XPath
+        
+        Args:
+            url_input: 可能包含XPath的URL输入
+            
+        Returns:
+            tuple: (基础URL, XPath选择器) 如果没有XPath则返回 (url_input, None)
+        """
+        if ':' in url_input:
+            # 查找协议后的第一个冒号
+            protocol_end = url_input.find('://')
+            if protocol_end != -1:
+                # 从协议后开始查找冒号
+                search_start = protocol_end + 3
+                xpath_separator = url_input.find(':', search_start)
+                
+                if xpath_separator != -1:
+                    # 找到XPath分隔符
+                    base_url = url_input[:xpath_separator]
+                    xpath = url_input[xpath_separator + 1:]
+                    
+                    logger.info(f"检测到URL与XPath组合:")
+                    logger.info(f"  基础URL: {base_url}")
+                    logger.info(f"  XPath: {xpath}")
+                    
+                    return base_url, xpath
+        
+        # 没有检测到XPath
+        return url_input, None
+
+    def capture_url_with_auto_detection(self, url_input: str, output_path: str, 
+                                       device: str = 'desktop', wait_time: int = 3,
+                                       full_page: bool = True) -> str:
+        """
+        智能截图方法，自动检测URL中是否包含XPath
+        
+        Args:
+            url_input: 可能包含XPath的URL输入
+            output_path: 输出文件路径
+            device: 设备类型
+            wait_time: 等待时间
+            full_page: 是否截取完整页面（仅当没有XPath时有效）
+            
+        Returns:
+            保存的文件路径
+        """
+        base_url, xpath = self._parse_url_with_xpath(url_input)
+        
+        if xpath:
+            # 如果检测到XPath，截取特定元素
+            logger.info("检测到XPath，将截取特定元素")
+            return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time)
+        else:
+            # 如果没有XPath，正常截取页面
+            logger.info("未检测到XPath，将截取整个页面")
+            return self.capture_url(base_url, output_path, device, wait_time, full_page)
     
     def capture_url(self, url: str, output_path: str, 
                    device: str = 'desktop', wait_time: int = 3,
                    full_page: bool = True) -> str:
         """
-        截取网页
+        截取网页（支持URL:XPath格式自动检测）
         
         Args:
-            url: 网页URL
+            url: 网页URL，支持格式：
+                - 普通URL: https://example.com
+                - URL+XPath: https://example.com:/html/body/div[1]/span
             output_path: 输出文件路径
             device: 设备类型
             wait_time: 页面加载等待时间（秒）
-            full_page: 是否截取完整页面
+            full_page: 是否截取完整页面（仅当没有XPath时有效）
             
         Returns:
             保存的文件路径
         """
+        # 先检查是否包含XPath
+        base_url, xpath = self._parse_url_with_xpath(url)
+        
+        if xpath:
+            # 如果检测到XPath，使用元素截图方法
+            logger.info("检测到XPath格式，将截取特定元素")
+            return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time)
+        
+        # 没有XPath，执行正常的页面截图
         try:
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size)
+            self._setup_driver(device_size, device_type=device)
             
             # 访问页面
-            logger.info(f"正在访问页面: {url}")
-            self.driver.get(url)
+            logger.info(f"正在访问页面: {base_url}")
+            self.driver.get(base_url)
             
             # 设置语言
             self._set_language()
@@ -158,6 +321,12 @@ class ScreenshotCapture:
             WebDriverWait(self.driver, 10).until(
                 lambda driver: driver.execute_script("return document.readyState") == "complete"
             )
+            
+            # 等待CSS和JavaScript完全加载
+            self._wait_for_page_fully_loaded()
+            
+            # 额外等待确保样式应用完成
+            time.sleep(2)
             
             # 确保输出目录存在
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -228,10 +397,12 @@ class ScreenshotCapture:
     def capture_element(self, url: str, selector: str, output_path: str,
                        device: str = 'desktop', wait_time: int = 3) -> str:
         """
-        截取页面特定元素
+        截取页面特定元素（支持URL:XPath格式自动检测）
         
         Args:
-            url: 网页URL
+            url: 网页URL，支持格式：
+                - 普通URL: https://example.com
+                - URL+XPath: https://example.com:/html/body/div[1]/span (此时忽略selector参数)
             selector: CSS选择器
             output_path: 输出文件路径
             device: 设备类型
@@ -240,17 +411,34 @@ class ScreenshotCapture:
         Returns:
             保存的文件路径
         """
+        # 先检查是否包含XPath
+        base_url, xpath = self._parse_url_with_xpath(url)
+        
+        if xpath:
+            # 如果检测到XPath，忽略selector参数，使用XPath方法
+            logger.info("检测到XPath格式，将使用XPath而不是CSS选择器")
+            return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time)
+        
+        # 没有XPath，执行正常的CSS选择器截图
         try:
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size)
+            self._setup_driver(device_size, device_type=device)
             
             # 访问页面
-            self.driver.get(url)
+            self.driver.get(base_url)
             
             # 设置语言
             self._set_language()
             
             time.sleep(wait_time)
+            
+            # 等待页面完全加载
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            
+            # 等待CSS和JavaScript完全加载
+            self._wait_for_page_fully_loaded()
             
             # 等待元素出现
             element = WebDriverWait(self.driver, 10).until(
@@ -275,14 +463,173 @@ class ScreenshotCapture:
             if self.driver:
                 self.driver.quit()
                 self.driver = None
+
+    def capture_element_by_xpath(self, url: str, xpath: str, output_path: str,
+                                device: str = 'desktop', wait_time: int = 3) -> str:
+        """
+        通过XPath截取页面特定元素
+        
+        Args:
+            url: 网页URL
+            xpath: XPath选择器
+            output_path: 输出文件路径
+            device: 设备类型
+            wait_time: 等待时间
+            
+        Returns:
+            保存的文件路径
+        """
+        try:
+            device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
+            self._setup_driver(device_size, device_type=device)
+            
+            # 访问页面
+            logger.info(f"正在访问页面: {url}")
+            self.driver.get(url)
+            
+            # 设置语言
+            self._set_language()
+            
+            # 为移动端设置localStorage
+            if device == 'mobile':
+                logger.info("设置移动端localStorage...")
+                # 设置 h5_kalodata_first_open
+                self.driver.execute_script("localStorage.setItem('h5_kalodata_first_open', 'true');")
+                # 设置 h5_kalodata_last_visit 为当前时间戳
+                self.driver.execute_script("localStorage.setItem('h5_kalodata_last_visit', Date.now().toString());")
+                # 设置 h5_language 为 en-US
+                self.driver.execute_script("localStorage.setItem('h5_language', 'en-US');")
+                # 设置弹窗控制相关项目
+                self.driver.execute_script("localStorage.setItem('h5_kalodata_modal_state', 'hidden');")
+                self.driver.execute_script("localStorage.setItem('h5_app_guide_shown', 'true');")
+                self.driver.execute_script("localStorage.setItem('h5_download_guide_dismissed', 'true');")
+                logger.info("移动端localStorage设置完成")
+                
+                # 等待1秒后刷新页面
+                logger.info("等待1秒后刷新页面以应用localStorage设置...")
+                time.sleep(1)
+                self.driver.refresh()
+                self._set_language()
+            
+            time.sleep(wait_time)
+            
+            # 等待页面完全加载
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            
+            # 等待CSS和JavaScript完全加载
+            self._wait_for_page_fully_loaded()
+            
+            logger.info(f"正在查找XPath元素: {xpath}")
+            
+            # 等待元素出现
+            element = WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.XPATH, xpath))
+            )
+            
+            # 滚动到元素位置
+            self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", element)
+            time.sleep(2)  # 等待滚动完成
+            
+            # 额外等待确保元素样式完全应用
+            time.sleep(2)
+            
+            # 注意：移除了调试高亮代码，避免影响截图真实性
+            
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # 截取元素
+            element.screenshot(output_path)
+            
+            logger.info(f"XPath元素截图保存成功: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"XPath元素截图失败: {e}")
+            logger.error(f"XPath: {xpath}")
+            logger.error(f"URL: {url}")
+            raise
+        finally:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
+
+    def capture_by_xpath(self, url: str, xpath: str = None, output_dir: str = '',
+                        device: str = 'desktop', wait_time: int = 3) -> str:
+        """
+        通过XPath截取元素的便捷方法（支持URL:XPath格式）
+        
+        Args:
+            url: 网页URL，支持格式：
+                - 普通URL: https://example.com (需要提供xpath参数)
+                - URL+XPath: https://example.com:/html/body/div[1]/span (xpath参数可选)
+            xpath: XPath选择器（当URL中不包含XPath时必需）
+            output_dir: 输出目录
+            device: 设备类型
+            wait_time: 等待时间
+            
+        Returns:
+            保存的文件路径
+        """
+        # 解析URL，检查是否包含XPath
+        base_url, url_xpath = self._parse_url_with_xpath(url)
+        
+        # 确定要使用的XPath
+        final_xpath = url_xpath if url_xpath else xpath
+        
+        if not final_xpath:
+            raise ValueError("必须提供XPath选择器，可以通过xpath参数或URL中的:xpath格式提供")
+        
+        # 构建文件名
+        filename = self.build_filename_from_xpath(final_xpath, device, base_url)
+        output_path = os.path.join(output_dir, filename)
+        
+        return self.capture_element_by_xpath(base_url, final_xpath, output_path, device, wait_time)
+    
+    def build_filename_from_xpath(self, xpath: str, device: str, url: str) -> str:
+        """
+        从XPath构建文件名
+        
+        Args:
+            xpath: XPath选择器
+            device: 设备类型
+            url: 网页URL
+            
+        Returns:
+            文件名
+        """
+        # 从URL提取域名
+        from urllib.parse import urlparse
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.replace('www.', '').replace('.', '_')
+        
+        # 简化XPath，提取关键部分
+        xpath_simple = xpath.replace('/', '_').replace('[', '_').replace(']', '_').replace('(', '_').replace(')', '_')
+        # 限制长度
+        if len(xpath_simple) > 50:
+            xpath_simple = xpath_simple[:50]
+        
+        # 构建文件名
+        filename = f"xpath_{domain}_{xpath_simple}_{device}.png"
+        
+        # 清理文件名中的特殊字符
+        import re
+        filename = re.sub(r'[^\w\-_\.]', '_', filename)
+        filename = re.sub(r'_+', '_', filename)  # 合并多个下划线
+        
+        return filename
     
     def capture_multiple_devices(self, url: str, output_dir: str,
                                 devices: List[str] = None, wait_time: int = 3) -> Dict[str, str]:
         """
-        在多个设备尺寸下截图
+        在多个设备尺寸下截图（支持URL:XPath格式）
         
         Args:
-            url: 网页URL
+            url: 网页URL，支持格式：
+                - 普通URL: https://example.com
+                - URL+XPath: https://example.com:/html/body/div[1]/span
             output_dir: 输出目录
             devices: 设备列表
             wait_time: 等待时间
@@ -327,7 +674,7 @@ class ScreenshotCapture:
             页面信息字典
         """
         try:
-            self._setup_driver()
+            self._setup_driver(device_type='desktop')
             self.driver.get(url)
             
             # 设置语言
@@ -401,7 +748,7 @@ class ScreenshotCapture:
         """
         try:
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size)
+            self._setup_driver(device_size, device_type=device)
             
             # 访问页面
             self.driver.get(url)
@@ -410,6 +757,14 @@ class ScreenshotCapture:
             self._set_language()
             
             time.sleep(wait_time)
+            
+            # 等待页面完全加载
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            
+            # 等待CSS和JavaScript完全加载
+            self._wait_for_page_fully_loaded()
             
             # 构建选择器
             selector = self.build_class_selector(classes)
@@ -487,7 +842,7 @@ class ScreenshotCapture:
         """
         try:
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size)
+            self._setup_driver(device_size, device_type=device)
             
             # 访问页面
             self.driver.get(url)
@@ -496,6 +851,14 @@ class ScreenshotCapture:
             self._set_language()
             
             time.sleep(wait_time)
+            
+            # 等待页面完全加载
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            
+            # 等待CSS和JavaScript完全加载
+            self._wait_for_page_fully_loaded()
             
             # 构建选择器
             selector = self.build_class_selector(classes)

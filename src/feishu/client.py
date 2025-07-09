@@ -7,6 +7,7 @@ import json
 from typing import Dict, List, Optional, Any
 from ..utils.logger import get_logger
 from ..utils.config import Config
+import time
 
 logger = get_logger(__name__)
 
@@ -24,8 +25,8 @@ class FeishuClient:
     
     def get_access_token(self) -> str:
         """
-        获取访问令牌
-        Get access token
+        获取飞书访问令牌
+        Get Feishu access token
         
         Returns:
             访问令牌 access token
@@ -39,21 +40,55 @@ class FeishuClient:
             "app_secret": self.config['app_secret']
         }
         
-        try:
-            response = requests.post(url, json=data)
-            response.raise_for_status()
-            result = response.json()
-            
-            if result.get('code') == 0:
-                self.access_token = result['tenant_access_token']
-                logger.info("成功获取飞书访问令牌 / Successfully obtained Feishu access token")
-                return self.access_token
-            else:
-                raise Exception(f"获取访问令牌失败: {result.get('msg', 'Unknown error')}")
+        max_retries = 3
+        retry_delay = 2  # 秒
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"获取飞书访问令牌 (尝试 {attempt + 1}/{max_retries})")
                 
-        except Exception as e:
-            logger.error(f"获取飞书访问令牌失败: {e}")
-            raise
+                response = requests.post(
+                    url, 
+                    json=data, 
+                    timeout=10,  # 添加超时
+                    headers={
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (compatible; FeishuClient/1.0)'
+                    }
+                )
+                response.raise_for_status()
+                result = response.json()
+                
+                if result.get('code') == 0:
+                    self.access_token = result['tenant_access_token']
+                    logger.info("成功获取飞书访问令牌 / Successfully obtained Feishu access token")
+                    return self.access_token
+                else:
+                    raise Exception(f"获取访问令牌失败: {result.get('msg', 'Unknown error')}")
+                    
+            except (requests.exceptions.ConnectionError, ConnectionResetError) as e:
+                logger.warning(f"连接错误 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                    continue
+                else:
+                    logger.error("所有重试都失败了")
+                    raise
+            except requests.exceptions.Timeout as e:
+                logger.warning(f"请求超时 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    logger.error("所有重试都失败了")
+                    raise
+            except Exception as e:
+                logger.error(f"获取飞书访问令牌失败: {e}")
+                raise
     
     def get_document_content(self, document_token: str) -> Dict[str, Any]:
         """
@@ -71,23 +106,50 @@ class FeishuClient:
         
         headers = {
             "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (compatible; FeishuClient/1.0)"
         }
         
-        try:
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            
-            if result.get('code') == 0:
-                logger.info(f"成功获取文档内容: {document_token}")
-                return result['data']
-            else:
-                raise Exception(f"获取文档内容失败: {result.get('msg', 'Unknown error')}")
+        max_retries = 3
+        retry_delay = 2  # 秒
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"获取文档内容 (尝试 {attempt + 1}/{max_retries}): {document_token}")
                 
-        except Exception as e:
-            logger.error(f"获取文档内容失败: {e}")
-            raise
+                response = requests.get(url, headers=headers, timeout=15)
+                response.raise_for_status()
+                result = response.json()
+                
+                if result.get('code') == 0:
+                    logger.info(f"成功获取文档内容: {document_token}")
+                    return result['data']
+                else:
+                    raise Exception(f"获取文档内容失败: {result.get('msg', 'Unknown error')}")
+                    
+            except (requests.exceptions.ConnectionError, ConnectionResetError) as e:
+                logger.warning(f"连接错误 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+                    continue
+                else:
+                    logger.error("所有重试都失败了")
+                    raise
+            except requests.exceptions.Timeout as e:
+                logger.warning(f"请求超时 (尝试 {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    logger.info(f"等待 {retry_delay} 秒后重试...")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    logger.error("所有重试都失败了")
+                    raise
+            except Exception as e:
+                logger.error(f"获取文档内容失败: {e}")
+                raise
     
     def get_document_blocks(self, document_token: str) -> List[Dict[str, Any]]:
         """
@@ -263,18 +325,121 @@ class FeishuClient:
         logger.info(f"提取到文本长度: {len(result)} 字符")
         return result
     
-    def parse_prd_document(self, document_token: str) -> Dict[str, Any]:
+    def extract_document_token(self, document_input) -> str:
+        """
+        从文档输入中提取token，支持完整链接、直接token和超链接对象
+        Extract document token from input, supports full URL, direct token, and hyperlink objects
+        
+        Args:
+            document_input: 文档链接、token或超链接对象 (document URL, token, or hyperlink object)
+            
+        Returns:
+            提取的文档token (extracted document token)
+        """
+        import re
+        
+        # 处理超链接对象格式（飞书多维表格超链接字段）
+        if isinstance(document_input, dict):
+            # 超链接对象格式：{"text": "AI 日历", "link": "https://..."}
+            if 'link' in document_input:
+                actual_link = document_input['link']
+                logger.info(f"检测到超链接对象格式，提取链接: {actual_link}")
+                # 递归调用处理实际链接
+                return self.extract_document_token(actual_link)
+            else:
+                raise ValueError(f"超链接对象格式不正确，缺少 'link' 字段: {document_input}。请确保超链接对象包含有效的文档链接。")
+        
+        # 处理字符串格式
+        if not document_input or not str(document_input).strip():
+            raise ValueError("文档输入不能为空")
+        
+        document_input = str(document_input).strip()
+        
+        # 首先尝试从URL中提取token
+        # 支持的格式:
+        # https://company.feishu.cn/docx/token
+        # https://company.feishu.cn/docs/token
+        # https://company.feishu.cn/document/token
+        token_patterns = [
+            r'/docx/([a-zA-Z0-9]+)',
+            r'/docs/([a-zA-Z0-9]+)', 
+            r'/document/([a-zA-Z0-9]+)'
+        ]
+        
+        for pattern in token_patterns:
+            match = re.search(pattern, document_input)
+            if match:
+                token = match.group(1)
+                if self._is_valid_document_token(token):
+                    logger.info(f"从链接中提取到文档token: {token}")
+                    return token
+        
+        # 如果不是URL格式，检查是否是有效的token
+        if self._is_valid_document_token(document_input):
+            logger.info(f"使用直接token: {document_input}")
+            return document_input
+        
+        # 最后尝试清理输入（移除特殊字符）
+        cleaned_token = re.sub(r'[^a-zA-Z0-9]', '', document_input)
+        if self._is_valid_document_token(cleaned_token):
+            logger.warning(f"使用清理后的token: {cleaned_token}")
+            return cleaned_token
+        
+        # 提供详细的错误信息
+        if len(document_input) < 3:
+            raise ValueError(f"输入'{document_input}'太短，无法识别为有效的文档token或链接。")
+        else:
+            raise ValueError(f"无法从输入'{document_input}'中提取有效的文档token。请提供：\n1. 完整飞书文档链接 (如: https://company.feishu.cn/docx/token)\n2. 直接的文档token (如: ZzVudkYQqobhj7xn19GcZ3LFnwd)")
+
+    def _is_valid_document_token(self, token: str) -> bool:
+        """
+        验证文档token是否有效
+        Validate if document token is valid
+        
+        Args:
+            token: 待验证的token
+            
+        Returns:
+            是否有效
+        """
+        import re
+        
+        if not token:
+            return False
+        
+        # 飞书文档token通常特征：
+        # 1. 长度通常在15-30个字符之间
+        # 2. 只包含字母和数字
+        # 3. 通常包含大小写字母
+        if len(token) < 15 or len(token) > 50:
+            return False
+        
+        if not re.match(r'^[a-zA-Z0-9]+$', token):
+            return False
+        
+        # 确保包含至少一些大写和小写字母（飞书token的典型特征）
+        has_upper = any(c.isupper() for c in token)
+        has_lower = any(c.islower() for c in token)
+        has_digit = any(c.isdigit() for c in token)
+        
+        return has_upper and has_lower and has_digit
+
+
+
+    def parse_prd_document(self, document_input: str) -> Dict[str, Any]:
         """
         解析PRD文档
         Parse PRD document
         
         Args:
-            document_token: 文档token document token
+            document_input: 文档链接或token (document URL or token)
             
         Returns:
             解析结果 parsing result
         """
         try:
+            # 提取文档token
+            document_token = self.extract_document_token(document_input)
             logger.info(f"开始解析PRD文档: {document_token}")
             
             # 获取文档基本信息

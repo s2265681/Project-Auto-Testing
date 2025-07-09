@@ -17,7 +17,7 @@
 当点击执行结果栏按钮时，自动完成以下流程：
 1. 解析PRD文档生成测试用例
 2. 比较Figma设计与网站视觉效果
-3. 将测试用例填入多维表格的测试用例文档栏
+3. 将测试用例填入多维表格的测试用例栏
 4. 将比较结果填入网站相似度报告栏
 
 ## 技术栈
@@ -105,13 +105,74 @@ python main.py inspect-bitable \
 | 字段名 | 类型 | 用途 |
 |--------|------|------|
 | `项目名称` | 单行文本 | 项目标识 |
-| `prd文档链接token` | 单行文本 | PRD文档token |
-| `测试用例文档` | 多行文本 | 存储生成的测试用例 |
+| `prd文档链接` | 单行文本 / 超链接 | PRD文档链接或token（支持完整链接、token和超链接对象） |
+| `测试用例` | 多行文本 | 存储生成的测试用例 |
 | `figma地址` | URL | Figma设计稿链接 |
 | `网页地址` | URL | 要测试的网页链接 |
 | `网页类名` | 单行文本 | CSS类名(可选) |
+| `是否是移动端` | 单选 | "是"为移动端测试，"否"为桌面端测试 |
 | `网站相似度报告` | 多行文本 | 存储比较结果报告 |
 | `执行结果` | 单选 | 执行状态标记 |
+
+## 📄 PRD文档链接格式说明
+
+### 支持的格式
+
+**1. 完整飞书文档链接：**
+```
+https://company.feishu.cn/docx/ZzVudkYQqobhj7xn19GcZ3LFnwd
+https://company.feishu.cn/docs/ZzVudkYQqobhj7xn19GcZ3LFnwd
+https://company.feishu.cn/document/ZzVudkYQqobhj7xn19GcZ3LFnwd
+```
+
+**2. 直接文档token：**
+```
+ZzVudkYQqobhj7xn19GcZ3LFnwd
+```
+
+**3. 文档标题（飞书多维表格自动转换）：**
+```
+AI 日历
+```
+
+**4. 超链接对象格式（超链接字段类型）：**
+```json
+{
+  "text": "AI 日历",
+  "link": "https://company.feishu.cn/docx/ZzVudkYQqobhj7xn19GcZ3LFnwd"
+}
+```
+
+### 字段类型支持
+
+| 字段类型 | 支持格式 | 说明 |
+|---------|----------|------|
+| 单行文本 | 完整链接、直接token、文档标题 | 传统文本字段 |
+| 超链接 | 自动从link属性提取，支持所有格式 | 飞书多维表格超链接字段 |
+| 文档标题 | 通过搜索API查找对应token | 当飞书自动转换链接为标题时 |
+
+### 使用说明
+- **方式1：** 在多维表格的"prd文档链接"字段中，直接粘贴完整的飞书文档URL
+- **方式2：** 直接填入文档token
+- **方式3：** 当飞书多维表格自动将链接转换为文档标题时，系统会自动通过标题搜索找到对应的文档token
+- **方式4：** 将字段类型设置为"超链接"，系统会自动从link属性提取实际链接
+- 四种方式都完全兼容，系统会智能识别输入类型并正确处理
+
+## 📱 设备类型支持
+
+### 自动设备识别
+系统支持通过"是否是移动端"字段自动设置设备类型：
+
+| 字段值 | 设备类型 | 屏幕分辨率 | 用途 |
+|--------|----------|------------|------|
+| 是 | mobile | 375×667 | 移动端界面测试 |
+| 否 | desktop | 1920×1080 | 桌面端界面测试 |
+
+### 配置说明
+1. 在多维表格中添加"是否是移动端"单选字段
+2. 设置选项：`是` 和 `否`
+3. 系统会根据此字段自动调整截图设备类型
+4. 兼容原有的手动device参数设置
 
 ## 📋 使用示例
 
@@ -240,7 +301,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 ## 📊 输出结果
 
 工作流会生成以下内容：
-- 测试用例文档（填入多维表格）
+- 测试用例（填入多维表格）
 - 网站相似度报告（填入多维表格）
 - 比较图像文件（保存到本地）
 - 详细的JSON报告（保存到本地）
@@ -286,7 +347,7 @@ recordid Dq3YrJb2ke0LQdcmLjZccaZ2nz0
 
 
  # 更新
- python main.py test-bitable-update --app-token "GzpBblAM5aoH18sHNt0cpDYXnYf" --table-id "tblsLP3GVnzFobjP" --record-id "Dq3YrJb2ke0LQdcmLjZccaZ2nz0" --field-name "测试用例文档" --field-value "这是一个测试更新 - $(date)"
+ python main.py test-bitable-update --app-token "GzpBblAM5aoH18sHNt0cpDYXnYf" --table-id "tblsLP3GVnzFobjP" --record-id "Dq3YrJb2ke0LQdcmLjZccaZ2nz0" --field-name "测试用例" --field-value "这是一个测试更新 - $(date)"
 
 # 查询当前条的id
 python main.py inspect-bitable --app-token "GzpBblAM5aoH18sHNt0cpDYXnYf" --table-id "tblsLP3GVnzFobjP"
@@ -297,7 +358,7 @@ python main.py test-bitable-update \
   --app-token "GzpBblAM5aoH18sHNt0cpDYXnYf" \
   --table-id "tblsLP3GVnzFobjP" \
   --record-id "receLUWNBZ" \
-  --field-name "测试用例文档" \
+  --field-name "测试用例" \
   --field-value "权限测试成功 ✅"
 
 # 2. 如果测试成功，运行完整工作流
@@ -314,3 +375,32 @@ python main.py execute-workflow \
 
   # 最终测试
   python main.py execute-workflow --app-token "GzpBblAM5aoH18sHNt0cpDYXnYf" --table-id "tblsLP3GVnzFobjP" --record-id "receLUWNBZ" --prd-document-token "ZzVudkYQqobhj7xn19GcZ3LFnwd" --figma-url "https://www.figma.com/design/VHgFAzQGYpZtOgYJxk609O/25%E5%85%A8%E5%B1%80%E8%BF%AD%E4%BB%A3?node-id=6862-67131&m=dev" --website-url "https://www.kalodata.com/product" --website-classes "ant-input-affix-wrapper css-2yep4o ant-input-outlined w-[599px]" --device desktop
+
+
+  # 启服务
+python api_server.py --port 5001
+
+
+https://rock-feishu.loca.lt/api/execute-workflow
+Content-Type application/json
+Authorization Bearer {access_token}
+{
+  "docToken": "{{ 第1步.prd 文档链接token }}",
+  "figmaUrl": "{{ 第1步.figma地址 }}",
+  "webUrl": "{{ 第1步.网页地址 }}",
+  "webUrlPath": "{{ 第1步.网页类名 }}",
+  "appToken": "GzpBblAM5aoH18sHNt0cpDYXnYf",
+  "tableId": "tblsLP3GVnzFobjP",
+  "recordId": "{{ 第1步.记录ID }}",
+  "device": "desktop"
+}
+
+# 启动localtunnel 内网穿透  https://rock-feishu.loca.lt
+> 关闭vpn获取真实ip curl ifconfig.me 用这个作为密码
+> lt --port 5001 --subdomain rock-feishu --auth "117.147.97.167"
+
+
+# 区分测试类型
+> 帮我增加一个参数，当测试类型testType值为功能测试的时候，只执行解析飞书文档，生成测试用例， 当测试类型testType为UI测试的时候，只执行对比网站和Figma的设计
+
+

@@ -814,10 +814,18 @@ def capture_element(website_url, selector, output_path, device, wait_time, langu
 @click.option('--website-classes', '-c', help='网站CSS类名(可选) / Website CSS classes (optional)')
 @click.option('--device', '-d', default='desktop', help='设备类型 / Device type (desktop, mobile, tablet)')
 @click.option('--output-dir', '-o', default='reports', help='输出目录 / Output directory')
+@click.option('--test-type', '--type', type=click.Choice(['功能测试', 'UI测试', '完整测试']), default='完整测试', help='测试类型 / Test type')
 def execute_workflow(app_token, table_id, record_id, prd_document_token, 
-                    figma_url, website_url, website_classes, device, output_dir):
-    """执行完整工作流：PRD解析、测试用例生成、视觉比较和多维表格更新 / Execute complete workflow: PRD parsing, test case generation, visual comparison and bitable update"""
-    console.print(Panel.fit("🚀 执行完整工作流 / Execute Complete Workflow", style="blue"))
+                    figma_url, website_url, website_classes, device, output_dir, test_type):
+    """执行工作流：根据测试类型执行相应流程 / Execute workflow: execute corresponding processes based on test type"""
+    test_type_display = {
+        '功能测试': '🧪 功能测试 (PRD解析+测试用例生成)',
+        'UI测试': '🎨 UI测试 (Figma与网站视觉比较)',
+        '完整测试': '🚀 完整测试 (功能测试+UI测试)'
+    }
+    
+    panel_title = test_type_display.get(test_type, f"🚀 {test_type}")
+    console.print(Panel.fit(panel_title, style="blue"))
     
     try:
         # 验证配置
@@ -833,6 +841,7 @@ def execute_workflow(app_token, table_id, record_id, prd_document_token,
         param_table.add_column("参数 / Parameter", style="cyan")
         param_table.add_column("值 / Value", style="green")
         
+        param_table.add_row("测试类型 / Test Type", test_type)
         param_table.add_row("多维表格Token / App Token", app_token)
         param_table.add_row("数据表ID / Table ID", table_id)
         param_table.add_row("记录ID / Record ID", record_id)
@@ -846,7 +855,7 @@ def execute_workflow(app_token, table_id, record_id, prd_document_token,
         console.print(param_table)
         
         # 执行工作流
-        console.print("\n🔄 开始执行工作流...")
+        console.print(f"\n🔄 开始执行{test_type}...")
         result = executor.execute_button_click(
             app_token=app_token,
             table_id=table_id,
@@ -854,41 +863,57 @@ def execute_workflow(app_token, table_id, record_id, prd_document_token,
             prd_document_token=prd_document_token,
             figma_url=figma_url,
             website_url=website_url,
-            website_classes=website_classes,
+            xpath_selector=website_classes,
             device=device,
-            output_dir=output_dir
+            output_dir=output_dir,
+            test_type=test_type
         )
         
         # 显示结果
         if result['status'] == 'success':
-            console.print("✅ 工作流执行成功！", style="green")
+            executed_test_type = result.get('test_type', test_type)
+            console.print(f"✅ {executed_test_type}执行成功！", style="green")
             
-            # 显示测试用例生成结果
-            if result['test_cases']:
-                test_cases = result['test_cases']
-                console.print(f"\n📋 测试用例生成结果:")
-                console.print(f"• PRD文档长度: {test_cases['prd_text_length']} 字符")
-                console.print(f"• 生成时间: {test_cases['generated_at']}")
-                console.print(f"• 测试用例已填入多维表格")
+            # 根据测试类型显示相应结果
+            if test_type == "功能测试" or test_type == "完整测试":
+                # 显示测试用例生成结果
+                if result['test_cases']:
+                    test_cases = result['test_cases']
+                    console.print(f"\n📋 功能测试结果 (测试用例生成):")
+                    console.print(f"• PRD文档长度: {test_cases['prd_text_length']} 字符")
+                    console.print(f"• 生成时间: {test_cases['generated_at']}")
+                    console.print(f"• 测试用例已填入多维表格")
+                    
+                    # 显示API状态
+                    api_status = test_cases.get('api_status', 'unknown')
+                    if api_status == 'failed':
+                        console.print(f"⚠️  Gemini API调用失败，已生成错误报告", style="yellow")
+                    else:
+                        console.print(f"✅ 测试用例生成成功", style="green")
+                elif test_type == "功能测试":
+                    console.print(f"\n⚠️  功能测试未产生结果", style="yellow")
             
-            # 显示视觉比较结果
-            if result['comparison_result']:
-                comp_result = result['comparison_result']
-                comp_data = comp_result['comparison_result']
-                
-                console.print(f"\n🔍 视觉比较结果:")
-                comp_table = Table()
-                comp_table.add_column("指标 / Metric", style="cyan")
-                comp_table.add_column("值 / Value", style="green")
-                
-                comp_table.add_row("相似度分数 / Similarity Score", f"{comp_data['similarity_score']:.3f}")
-                comp_table.add_row("结构相似性 / SSIM", f"{comp_data['ssim_score']:.3f}")
-                comp_table.add_row("均方误差 / MSE", f"{comp_data['mse_score']:.2f}")
-                comp_table.add_row("哈希距离 / Hash Distance", str(comp_data['hash_distance']))
-                comp_table.add_row("差异区域数 / Differences", str(comp_data['differences_count']))
-                
-                console.print(comp_table)
-                console.print(f"📁 输出目录: {comp_result['output_directory']}")
+            if test_type == "UI测试" or test_type == "完整测试":
+                # 显示视觉比较结果
+                if result['comparison_result']:
+                    comp_result = result['comparison_result']
+                    comp_data = comp_result['comparison_result']
+                    
+                    console.print(f"\n🔍 UI测试结果 (视觉比较):")
+                    comp_table = Table()
+                    comp_table.add_column("指标 / Metric", style="cyan")
+                    comp_table.add_column("值 / Value", style="green")
+                    
+                    comp_table.add_row("相似度分数 / Similarity Score", f"{comp_data['similarity_score']:.3f}")
+                    comp_table.add_row("结构相似性 / SSIM", f"{comp_data['ssim_score']:.3f}")
+                    comp_table.add_row("均方误差 / MSE", f"{comp_data['mse_score']:.2f}")
+                    comp_table.add_row("哈希距离 / Hash Distance", str(comp_data['hash_distance']))
+                    comp_table.add_row("差异区域数 / Differences", str(comp_data['differences_count']))
+                    
+                    console.print(comp_table)
+                    console.print(f"📁 输出目录: {comp_result['output_directory']}")
+                elif test_type == "UI测试":
+                    console.print(f"\n⚠️  UI测试未产生结果", style="yellow")
             
             # 显示多维表格更新结果
             if result['bitable_updates']:
@@ -898,7 +923,7 @@ def execute_workflow(app_token, table_id, record_id, prd_document_token,
                 console.print(f"• 更新时间: {bitable_result['updated_at']}")
             
         else:
-            console.print("❌ 工作流执行失败", style="red")
+            console.print(f"❌ {test_type}执行失败", style="red")
             for error in result['errors']:
                 console.print(f"• {error}", style="red")
     
@@ -974,7 +999,7 @@ def inspect_bitable(app_token, table_id):
         
         console.print(f"\n💡 使用提示:")
         console.print(f"• 确保多维表格中包含以下字段用于工作流更新:")
-        console.print(f"  - 测试用例文档 (用于存储生成的测试用例)")
+        console.print(f"  - 测试用例 (用于存储生成的测试用例)")
         console.print(f"  - 网站相似度报告 (用于存储比较结果)")
         console.print(f"  - 执行结果 (用于标记执行状态)")
         console.print(f"  - 执行时间 (用于记录执行时间)")

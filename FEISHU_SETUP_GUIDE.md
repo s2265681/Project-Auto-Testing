@@ -27,7 +27,12 @@
    - `docx:write` - 文档写入权限（可选）
 
 2. **云空间权限 / Drive Permissions:**
-   - `drive:read` - 云空间读取权限
+   - `drive:drive` - 云空间基础权限
+   - `drive:file` - 文件访问权限（用于标题搜索功能）
+
+3. **多维表格权限 / Bitable Permissions:**
+   - `bitable:read` - 多维表格读取权限
+   - `bitable:write` - 多维表格写入权限
 
 ### 配置步骤 / Configuration Steps:
 
