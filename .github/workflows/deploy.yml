@@ -23,17 +23,18 @@ jobs:
           sudo mkdir -p /var/www/app
           sudo chown ubuntu:ubuntu /var/www/app
           
-          # 更新代码
-          cd /var/www/app
-          if [ ! -d 'product-auto-test' ]; then
-            git clone https://github.com/s2265681/Project-Aut-Testing.git product-auto-test
-          fi
-          cd product-auto-test
-          git pull origin main
-          
-          # 安装系统依赖
+          # 安装系统依赖（先安装基础包）
           sudo apt update -qq
-          sudo apt install -y python3-pip nodejs npm
+          sudo apt install -y python3-pip git curl
+          
+          # 使用wget下载代码包而不是git clone
+          cd /var/www/app
+          rm -rf product-auto-test
+          wget -q https://github.com/s2265681/Project-Auto-Testing/archive/refs/heads/main.zip
+          unzip -q main.zip
+          mv Project-Auto-Testing-main product-auto-test
+          rm main.zip
+          cd product-auto-test
           
           # 安装Python依赖
           python3 -m pip install -r requirements.txt --user --quiet
@@ -48,8 +49,10 @@ jobs:
         FIGMA_ACCESS_TOKEN=${{ secrets.FIGMA_ACCESS_TOKEN }}
         EOF
           
-          # 安装和配置PM2
+          # 安装Node.js和PM2（使用NVM避免依赖冲突）
           if ! command -v pm2 &> /dev/null; then
+            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+            sudo apt-get install -y nodejs
             sudo npm install -g pm2
           fi
           
@@ -60,4 +63,6 @@ jobs:
           
           echo '🎉 部署完成！'
           echo '服务器地址: http://18.141.179.222:5001'
+          echo '当前目录: $(pwd)'
+          echo '文件列表: $(ls -la)'
         " 
