@@ -23,6 +23,55 @@ from src.figma.client import FigmaClient
 from src.visual_comparison.comparator import VisualComparator
 from src.workflow.executor import WorkflowExecutor
 
+def cleanup_old_reports(reports_dir: str):
+    """
+    清理旧的报告目录，只保留最新的一个
+    Clean up old report directories, keep only the latest one
+    """
+    try:
+        if not os.path.exists(reports_dir):
+            return
+            
+        # 获取所有comparison_开头的目录
+        comparison_dirs = []
+        for item in os.listdir(reports_dir):
+            item_path = os.path.join(reports_dir, item)
+            if os.path.isdir(item_path) and item.startswith('comparison_'):
+                try:
+                    # 提取时间戳
+                    timestamp_str = item.replace('comparison_', '')
+                    timestamp = int(timestamp_str)
+                    comparison_dirs.append((timestamp, item_path))
+                except ValueError:
+                    # 如果无法解析时间戳，跳过
+                    console.print(f"⚠️  无法解析目录时间戳: {item}", style="yellow")
+                    continue
+        
+        # 如果没有旧目录，直接返回
+        if len(comparison_dirs) <= 1:
+            return
+        
+        # 按时间戳排序，保留最新的，删除其他的
+        comparison_dirs.sort(key=lambda x: x[0], reverse=True)  # 降序排列，最新的在前
+        
+        # 删除除最新的之外的所有目录
+        dirs_to_delete = comparison_dirs[1:]  # 跳过第一个（最新的）
+        
+        import shutil
+        for timestamp, dir_path in dirs_to_delete:
+            try:
+                console.print(f"🗑️  删除旧报告目录: {os.path.basename(dir_path)}", style="yellow")
+                shutil.rmtree(dir_path)
+            except Exception as e:
+                console.print(f"⚠️  删除目录失败 {dir_path}: {e}", style="yellow")
+        
+        if dirs_to_delete:
+            console.print(f"✅ 已清理 {len(dirs_to_delete)} 个旧报告目录，保留最新的报告", style="green")
+        
+    except Exception as e:
+        console.print(f"⚠️  清理旧报告时出错: {e}", style="yellow")
+        # 清理失败不应该影响主流程
+
 console = Console()
 logger = get_logger(__name__)
 
@@ -393,6 +442,9 @@ def compare_web_figma(website_url, figma_url, selector, classes, device, output_
         if not Config.validate_config():
             console.print("❌ 配置验证失败，请检查.env文件", style="red")
             return
+        
+        # 清理旧报告目录（只保留最新的一个）
+        cleanup_old_reports(output_dir)
         
         # 创建输出目录
         timestamp = int(time.time())

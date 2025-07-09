@@ -13,6 +13,55 @@ from flask_cors import CORS
 # 导入项目模块
 from src.workflow.executor import WorkflowExecutor
 
+def cleanup_old_reports(reports_dir: str):
+    """
+    清理旧的报告目录，只保留最新的一个
+    Clean up old report directories, keep only the latest one
+    """
+    try:
+        if not os.path.exists(reports_dir):
+            return
+            
+        # 获取所有comparison_开头的目录
+        comparison_dirs = []
+        for item in os.listdir(reports_dir):
+            item_path = os.path.join(reports_dir, item)
+            if os.path.isdir(item_path) and item.startswith('comparison_'):
+                try:
+                    # 提取时间戳
+                    timestamp_str = item.replace('comparison_', '')
+                    timestamp = int(timestamp_str)
+                    comparison_dirs.append((timestamp, item_path))
+                except ValueError:
+                    # 如果无法解析时间戳，跳过
+                    logger.warning(f"无法解析目录时间戳: {item}")
+                    continue
+        
+        # 如果没有旧目录，直接返回
+        if len(comparison_dirs) <= 1:
+            return
+        
+        # 按时间戳排序，保留最新的，删除其他的
+        comparison_dirs.sort(key=lambda x: x[0], reverse=True)  # 降序排列，最新的在前
+        
+        # 删除除最新的之外的所有目录
+        dirs_to_delete = comparison_dirs[1:]  # 跳过第一个（最新的）
+        
+        import shutil
+        for timestamp, dir_path in dirs_to_delete:
+            try:
+                logger.info(f"删除旧报告目录: {dir_path}")
+                shutil.rmtree(dir_path)
+            except Exception as e:
+                logger.warning(f"删除目录失败 {dir_path}: {e}")
+        
+        if dirs_to_delete:
+            logger.info(f"已清理 {len(dirs_to_delete)} 个旧报告目录，保留最新的报告")
+        
+    except Exception as e:
+        logger.warning(f"清理旧报告时出错: {e}")
+        # 清理失败不应该影响主流程
+
 app = Flask(__name__)
 CORS(app)  # 启用跨域支持
 
@@ -426,6 +475,9 @@ def execute_workflow():
                 "error": "工作流执行器未初始化"
             }), 500
         
+        # 清理旧报告（只保留最新的一个）
+        cleanup_old_reports("reports")
+        
         # 执行工作流
         try:
             result = workflow_executor.execute_button_click(
@@ -595,6 +647,9 @@ def execute_comparison():
         device = data.get('device', 'desktop')
         
         logger.info(f"执行视觉比较: figmaUrl={figma_url}, webUrl={website_url}, xpath={xpath_selector}")
+        
+        # 清理旧报告（只保留最新的一个）
+        cleanup_old_reports("reports")
         
         # 执行视觉比较
         comparison_result = workflow_executor._compare_figma_and_website(

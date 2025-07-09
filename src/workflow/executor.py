@@ -6,6 +6,9 @@ import os
 import time
 import json
 import sys
+import signal
+import psutil
+import threading
 from typing import Dict, List, Any, Optional
 from ..utils.logger import get_logger
 from ..feishu.client import FeishuClient
@@ -24,6 +27,32 @@ except ImportError:
         return "http://localhost:5001"
 
 logger = get_logger(__name__)
+
+class TimeoutException(Exception):
+    """超时异常"""
+    pass
+
+class WorkflowTimeoutHandler:
+    """工作流超时处理器"""
+    
+    def __init__(self, timeout_seconds: int):
+        self.timeout_seconds = timeout_seconds
+        self.timer = None
+        
+    def __enter__(self):
+        """进入上下文管理器"""
+        def timeout_handler():
+            logger.error(f"工作流执行超时 ({self.timeout_seconds}秒)")
+            raise TimeoutException(f"工作流执行超时 ({self.timeout_seconds}秒)")
+        
+        self.timer = threading.Timer(self.timeout_seconds, timeout_handler)
+        self.timer.start()
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """退出上下文管理器"""
+        if self.timer:
+            self.timer.cancel()
 
 def get_image_url(file_path, base_url=None):
     """
@@ -51,13 +80,142 @@ def get_image_url(file_path, base_url=None):
 class WorkflowExecutor:
     """工作流执行器 Workflow Executor"""
     
+    # 执行超时设置 (已优化减少等待时间)
+    MAX_EXECUTION_TIME = 180   # 3分钟总超时 (从5分钟减少)
+    MAX_SCREENSHOT_TIME = 60   # 1分钟截图超时 (从2分钟减少)
+    MAX_AI_GENERATION_TIME = 120  # 2分钟AI生成超时 (从3分钟减少)
+    MAX_COMPARISON_TIME = 30   # 30秒比较超时 (从1分钟减少)
+    
     def __init__(self):
         """初始化执行器 Initialize executor"""
         self.feishu_client = FeishuClient()
         self.gemini_generator = GeminiCaseGenerator()
-        self.screenshot_capture = ScreenshotCapture()
-        self.figma_client = FigmaClient()
-        self.visual_comparator = VisualComparator()
+        self.screenshot_capture = None  # 延迟初始化以节省内存
+        self.figma_client = None       # 延迟初始化以节省内存
+        self.visual_comparator = None  # 延迟初始化以节省内存
+        
+        # 资源监控
+        self.process = psutil.Process()
+        self.start_memory = None
+        
+    def _log_resource_usage(self, stage: str):
+        """记录资源使用情况"""
+        try:
+            memory_info = self.process.memory_info()
+            memory_mb = memory_info.rss / 1024 / 1024
+            cpu_percent = self.process.cpu_percent()
+            
+            if self.start_memory is None:
+                self.start_memory = memory_mb
+            
+            memory_increase = memory_mb - self.start_memory
+            
+            logger.info(f"[{stage}] 内存: {memory_mb:.1f}MB (+{memory_increase:.1f}MB), CPU: {cpu_percent:.1f}%")
+            
+            # 内存使用警告和限制
+            if memory_mb > 1024:  # 1GB
+                logger.warning(f"内存使用过高: {memory_mb:.1f}MB")
+                # 强制垃圾回收以释放内存
+                import gc
+                gc.collect()
+                logger.info("已执行垃圾回收以释放内存")
+            
+            # 严重内存警告
+            if memory_mb > 2048:  # 2GB
+                logger.error(f"内存使用严重过高: {memory_mb:.1f}MB，建议优化或增加内存")
+                # 清理所有组件
+                self._cleanup_component('screenshot_capture')
+                self._cleanup_component('figma_client')
+                self._cleanup_component('visual_comparator')
+                
+        except Exception as e:
+            logger.warning(f"资源监控失败: {e}")
+    
+    def _initialize_component_if_needed(self, component_name: str):
+        """按需初始化组件以节省内存"""
+        if component_name == 'screenshot_capture' and self.screenshot_capture is None:
+            logger.info("初始化截图捕获器")
+            self.screenshot_capture = ScreenshotCapture()
+            
+        elif component_name == 'figma_client' and self.figma_client is None:
+            logger.info("初始化Figma客户端")
+            self.figma_client = FigmaClient()
+            
+        elif component_name == 'visual_comparator' and self.visual_comparator is None:
+            logger.info("初始化视觉比较器")
+            self.visual_comparator = VisualComparator()
+    
+    def _cleanup_component(self, component_name: str):
+        """清理组件以释放内存"""
+        if component_name == 'screenshot_capture' and self.screenshot_capture:
+            try:
+                # 确保浏览器进程被清理
+                self.screenshot_capture._cleanup_processes()
+                self.screenshot_capture = None
+                logger.info("已清理截图捕获器")
+            except Exception as e:
+                logger.warning(f"清理截图捕获器失败: {e}")
+                
+        elif component_name == 'figma_client' and self.figma_client:
+            self.figma_client = None
+            logger.info("已清理Figma客户端")
+            
+        elif component_name == 'visual_comparator' and self.visual_comparator:
+            self.visual_comparator = None
+            logger.info("已清理视觉比较器")
+        
+        # 强制垃圾回收
+        import gc
+        gc.collect()
+    
+    def _cleanup_old_reports(self, reports_dir: str):
+        """
+        清理旧的报告目录，只保留最新的一个
+        Clean up old report directories, keep only the latest one
+        """
+        try:
+            if not os.path.exists(reports_dir):
+                return
+                
+            # 获取所有comparison_开头的目录
+            comparison_dirs = []
+            for item in os.listdir(reports_dir):
+                item_path = os.path.join(reports_dir, item)
+                if os.path.isdir(item_path) and item.startswith('comparison_'):
+                    try:
+                        # 提取时间戳
+                        timestamp_str = item.replace('comparison_', '')
+                        timestamp = int(timestamp_str)
+                        comparison_dirs.append((timestamp, item_path))
+                    except ValueError:
+                        # 如果无法解析时间戳，跳过
+                        logger.warning(f"无法解析目录时间戳: {item}")
+                        continue
+            
+            # 如果没有旧目录，直接返回
+            if len(comparison_dirs) <= 1:
+                return
+            
+            # 按时间戳排序，保留最新的，删除其他的
+            comparison_dirs.sort(key=lambda x: x[0], reverse=True)  # 降序排列，最新的在前
+            
+            # 删除除最新的之外的所有目录
+            dirs_to_delete = comparison_dirs[1:]  # 跳过第一个（最新的）
+            
+            import shutil
+            for timestamp, dir_path in dirs_to_delete:
+                try:
+                    logger.info(f"删除旧报告目录: {dir_path}")
+                    shutil.rmtree(dir_path)
+                except Exception as e:
+                    logger.warning(f"删除目录失败 {dir_path}: {e}")
+            
+            if dirs_to_delete:
+                logger.info(f"已清理 {len(dirs_to_delete)} 个旧报告目录，保留最新的报告")
+            
+        except Exception as e:
+            logger.warning(f"清理旧报告时出错: {e}")
+            # 清理失败不应该影响主流程
         
     def execute_button_click(self, 
                            app_token: str,
@@ -258,14 +416,21 @@ class WorkflowExecutor:
         Compare Figma design and website
         """
         try:
+            self._log_resource_usage("开始视觉比较")
+            
+            # 清理旧报告目录（只保留最新的一个）
+            self._cleanup_old_reports(output_dir)
+            
             # 创建输出目录
             timestamp = int(time.time())
             current_output_dir = os.path.join(output_dir, f"comparison_{timestamp}")
             os.makedirs(current_output_dir, exist_ok=True)
             
-            # 1. 网页截图
+            # 1. 网页截图 (按需初始化截图捕获器)
+            self._initialize_component_if_needed('screenshot_capture')
             website_screenshot_path = os.path.join(current_output_dir, f"website_{device}.png")
             
+            logger.info("开始网页截图")
             if xpath_selector:
                 # 按XPath截图
                 logger.info(f"使用XPath截图: {xpath_selector}")
@@ -274,7 +439,7 @@ class WorkflowExecutor:
                     xpath=xpath_selector,
                     output_dir=current_output_dir,
                     device=device,
-                    wait_time=8  # 增加等待时间确保样式完全加载
+                    wait_time=5  # 减少等待时间以提高效率
                 )
                 # 重命名文件为标准格式
                 xpath_filename = self.screenshot_capture.build_filename_from_xpath(
@@ -293,12 +458,16 @@ class WorkflowExecutor:
                     url=website_url,
                     output_path=website_screenshot_path,
                     device=device,
-                    wait_time=8  # 增加等待时间确保样式完全加载
+                    wait_time=5  # 减少等待时间以提高效率
                 )
             
-            # 2. Figma截图
+            self._log_resource_usage("网页截图完成")
+            
+            # 2. Figma截图 (按需初始化Figma客户端)
+            self._initialize_component_if_needed('figma_client')
             figma_image_path = os.path.join(current_output_dir, "figma_design.png")
             
+            logger.info("开始Figma设计稿获取")
             # 解析Figma URL
             figma_info = self.figma_client.parse_figma_url(figma_url)
             
@@ -358,16 +527,28 @@ class WorkflowExecutor:
             # 下载Figma图片
             self.figma_client.download_image(figma_image_url, figma_image_path)
             
-            # 3. 视觉比较
+            # 3. 视觉比较 (按需初始化视觉比较器)
+            self._initialize_component_if_needed('visual_comparator')
             comparison_result = self.visual_comparator.compare_images(
                 image1_path=website_screenshot_path,
                 image2_path=figma_image_path,
                 output_dir=current_output_dir
             )
             
+            self._log_resource_usage("视觉比较完成")
+            
             # 4. 生成报告
             report_path = os.path.join(current_output_dir, "comparison_report.json")
             self.visual_comparator.generate_report(comparison_result, report_path)
+            
+            self._log_resource_usage("报告生成完成")
+            
+            # 5. 清理组件以释放内存
+            self._cleanup_component('screenshot_capture')
+            self._cleanup_component('figma_client')
+            self._cleanup_component('visual_comparator')
+            
+            self._log_resource_usage("组件清理完成")
             
             return {
                 "figma_url": figma_url,

@@ -4,6 +4,8 @@ Website Screenshot Capture Module
 """
 import os
 import time
+import signal
+import psutil
 from typing import Dict, List, Optional, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -45,29 +47,66 @@ class ScreenshotCapture:
         self.headless = headless
         self.language = language
         self.driver = None
+        self.chrome_process_id = None  # 跟踪Chrome进程ID
+        
+    def _get_optimized_chrome_options(self) -> ChromeOptions:
+        """获取优化的Chrome选项以减少内存和CPU使用"""
+        options = ChromeOptions()
+        
+        if self.headless:
+            options.add_argument('--headless=new')  # 使用新的headless模式
+        
+        # 基础优化选项
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-extensions')
+        options.add_argument('--disable-plugins')
+        options.add_argument('--disable-images')  # 禁用图片加载以节省内存
+        
+        # 内存优化选项
+        options.add_argument('--memory-pressure-off')
+        options.add_argument('--max_old_space_size=2048')  # 限制V8内存使用
+        options.add_argument('--disable-background-timer-throttling')
+        options.add_argument('--disable-backgrounding-occluded-windows')
+        options.add_argument('--disable-renderer-backgrounding')
+        
+        # 性能优化选项
+        options.add_argument('--disable-features=VizDisplayCompositor')
+        options.add_argument('--disable-logging')
+        options.add_argument('--silent')
+        options.add_argument('--disable-default-apps')
+        options.add_argument('--disable-sync')
+        
+        # 网络和安全优化
+        options.add_argument('--disable-web-security')
+        options.add_argument('--disable-features=TranslateUI')
+        options.add_argument('--disable-ipc-flooding-protection')
+        
+        # 设置浏览器语言偏好
+        if self.language:
+            options.add_argument(f'--lang={self.language}')
+            options.add_experimental_option('prefs', {
+                'intl.accept_languages': self.language,
+                'profile.default_content_setting_values': {
+                    'notifications': 2,  # 禁用通知
+                    'geolocation': 2,    # 禁用地理位置
+                }
+            })
+        
+        return options
         
     def _setup_driver(self, device_size: Tuple[int, int] = None, device_type: str = 'desktop'):
         """设置浏览器驱动"""
         try:
+            # 清理之前的进程
+            self._cleanup_processes()
+            
             if self.browser.lower() == 'chrome':
-                options = ChromeOptions()
-                if self.headless:
-                    options.add_argument('--headless')
-                options.add_argument('--no-sandbox')
-                options.add_argument('--disable-dev-shm-usage')
-                options.add_argument('--disable-gpu')
-                options.add_argument('--disable-extensions')
-                
-                # 设置浏览器语言偏好
-                if self.language:
-                    options.add_argument(f'--lang={self.language}')
-                    options.add_experimental_option('prefs', {
-                        'intl.accept_languages': self.language
-                    })
+                options = self._get_optimized_chrome_options()
                 
                 # 为移动设备设置设备仿真
                 if device_type == 'mobile':
-                    # 设置移动设备仿真（iPhone 6）
                     mobile_emulation = {
                         "deviceMetrics": {
                             "width": 375,
@@ -82,6 +121,11 @@ class ScreenshotCapture:
                     options.add_argument(f'--window-size={device_size[0]},{device_size[1]}')
                 
                 self.driver = webdriver.Chrome(options=options)
+                
+                # 记录Chrome进程ID用于后续清理
+                if hasattr(self.driver, 'service') and hasattr(self.driver.service, 'process'):
+                    self.chrome_process_id = self.driver.service.process.pid
+                    logger.info(f"Chrome进程ID: {self.chrome_process_id}")
                 
             elif self.browser.lower() == 'firefox':
                 options = FirefoxOptions()
@@ -101,12 +145,143 @@ class ScreenshotCapture:
             if device_type != 'mobile' and device_size:
                 self.driver.set_window_size(device_size[0], device_size[1])
                 
+                # 设置页面加载超时
+                self.driver.set_page_load_timeout(30)  # 30秒超时
+                self.driver.implicitly_wait(10)  # 隐式等待10秒
+                
             logger.info(f"浏览器驱动设置成功: {self.browser}, 设备类型: {device_type}, 语言: {self.language}")
             
         except Exception as e:
             logger.error(f"浏览器驱动设置失败: {e}")
+            self._cleanup_processes()  # 确保清理
             raise
     
+    def _cleanup_processes(self):
+        """强制清理浏览器进程"""
+        try:
+            # 清理webdriver
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except Exception as e:
+                    logger.warning(f"关闭webdriver时出错: {e}")
+                finally:
+                    self.driver = None
+            
+            # 强制终止Chrome进程
+            if self.chrome_process_id:
+                try:
+                    if psutil.pid_exists(self.chrome_process_id):
+                        process = psutil.Process(self.chrome_process_id)
+                        # 首先尝试优雅关闭
+                        process.terminate()
+                        process.wait(timeout=5)
+                        
+                        # 如果还存在，强制杀死
+                        if process.is_running():
+                            process.kill()
+                        
+                        logger.info(f"已清理Chrome进程: {self.chrome_process_id}")
+                except (psutil.NoSuchProcess, psutil.TimeoutExpired) as e:
+                    logger.info(f"Chrome进程已结束或清理超时: {e}")
+                except Exception as e:
+                    logger.warning(f"清理Chrome进程时出错: {e}")
+                finally:
+                    self.chrome_process_id = None
+            
+            # 清理所有遗留的Chrome进程（额外保险措施）
+            self._kill_orphaned_chrome_processes()
+            
+        except Exception as e:
+            logger.error(f"清理进程时出错: {e}")
+    
+    def _kill_orphaned_chrome_processes(self):
+        """清理孤立的Chrome进程"""
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['name'] and 'chrome' in proc.info['name'].lower():
+                        # 检查是否是headless Chrome进程
+                        cmdline = proc.info.get('cmdline', [])
+                        if cmdline and any('--headless' in arg for arg in cmdline):
+                            logger.info(f"发现孤立Chrome进程: {proc.info['pid']}")
+                            proc.terminate()
+                            proc.wait(timeout=3)
+                            if proc.is_running():
+                                proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as e:
+            logger.warning(f"清理孤立Chrome进程时出错: {e}")
+
+    def _wait_for_page_fully_loaded(self, max_wait_time: int = 30):
+        """等待页面完全加载，包括CSS和JavaScript，增加超时控制"""
+        try:
+            start_time = time.time()
+            
+            # 基础页面加载检查（带超时）
+            WebDriverWait(self.driver, min(max_wait_time, 15)).until(
+                lambda driver: driver.execute_script("return document.readyState") == "complete"
+            )
+            
+            # 检查剩余时间
+            elapsed = time.time() - start_time
+            remaining_time = max_wait_time - elapsed
+            
+            if remaining_time <= 0:
+                logger.warning("页面加载检查超时，继续执行")
+                return
+            
+            # 等待图片加载（带超时）
+            try:
+                self.driver.execute_async_script("""
+                    var callback = arguments[arguments.length - 1];
+                    var timeout = arguments[0] * 1000;
+                    var startTime = Date.now();
+                    
+                    function checkImages() {
+                        if (Date.now() - startTime > timeout) {
+                            callback('timeout');
+                            return;
+                        }
+                        
+                        const images = document.querySelectorAll('img');
+                        let loadedCount = 0;
+                        const totalImages = images.length;
+                        
+                        if (totalImages === 0) {
+                            callback('success');
+                            return;
+                        }
+                        
+                        images.forEach(img => {
+                            if (img.complete) {
+                                loadedCount++;
+                            }
+                        });
+                        
+                        if (loadedCount === totalImages) {
+                            callback('success');
+                        } else {
+                            setTimeout(checkImages, 500);
+                        }
+                    }
+                    
+                    checkImages();
+                """, min(remaining_time, 10))
+            except Exception as e:
+                logger.warning(f"等待图片加载失败: {e}")
+            
+            # 最后等待一小段时间确保渲染完成
+            time.sleep(min(2, remaining_time))
+            
+            logger.debug("页面完全加载完成")
+            
+        except Exception as e:
+            logger.warning(f"等待页面完全加载失败: {e}")
+            # 如果检测失败，等待一个较短的固定时间
+            time.sleep(3)
+
     def _set_language(self):
         """设置浏览器语言偏好"""
         try:
@@ -146,77 +321,6 @@ class ScreenshotCapture:
         except Exception as e:
             logger.warning(f"设置语言失败: {e}")
 
-    def _wait_for_page_fully_loaded(self):
-        """等待页面完全加载，包括CSS和JavaScript"""
-        try:
-            # 等待所有网络请求完成
-            WebDriverWait(self.driver, 15).until(
-                lambda driver: driver.execute_script("""
-                    return (typeof window.performance !== 'undefined' && 
-                            window.performance.timing.loadEventEnd > 0) ||
-                           document.readyState === 'complete';
-                """)
-            )
-            
-            # 等待所有图片加载完成
-            self.driver.execute_script("""
-                return new Promise((resolve) => {
-                    const images = document.querySelectorAll('img');
-                    let loadedCount = 0;
-                    const totalImages = images.length;
-                    
-                    if (totalImages === 0) {
-                        resolve();
-                        return;
-                    }
-                    
-                    images.forEach(img => {
-                        if (img.complete) {
-                            loadedCount++;
-                        } else {
-                            img.onload = img.onerror = () => {
-                                loadedCount++;
-                                if (loadedCount === totalImages) {
-                                    resolve();
-                                }
-                            };
-                        }
-                    });
-                    
-                    if (loadedCount === totalImages) {
-                        resolve();
-                    }
-                });
-            """)
-            
-            # 等待CSS样式表加载完成
-            self.driver.execute_script("""
-                return new Promise((resolve) => {
-                    const styleSheets = document.styleSheets;
-                    for (let i = 0; i < styleSheets.length; i++) {
-                        try {
-                            // 尝试访问CSS规则来确保样式表已加载
-                            styleSheets[i].cssRules;
-                        } catch (e) {
-                            // 样式表可能还在加载中
-                            setTimeout(resolve, 1000);
-                            return;
-                        }
-                    }
-                    resolve();
-                });
-            """)
-            
-            # 等待可能的动态内容加载
-            time.sleep(1)
-            
-            logger.debug("页面完全加载完成")
-            
-        except Exception as e:
-            logger.warning(f"等待页面完全加载失败: {e}")
-            # 如果检测失败，至少等待一段时间
-            time.sleep(3)
-
     def _parse_url_with_xpath(self, url_input: str) -> tuple[str, str]:
         """
         解析URL输入，检查是否包含XPath
@@ -239,14 +343,8 @@ class ScreenshotCapture:
                     # 找到XPath分隔符
                     base_url = url_input[:xpath_separator]
                     xpath = url_input[xpath_separator + 1:]
-                    
-                    logger.info(f"检测到URL与XPath组合:")
-                    logger.info(f"  基础URL: {base_url}")
-                    logger.info(f"  XPath: {xpath}")
-                    
                     return base_url, xpath
         
-        # 没有检测到XPath
         return url_input, None
 
     def capture_url_with_auto_detection(self, url_input: str, output_path: str, 
@@ -315,18 +413,10 @@ class ScreenshotCapture:
             self._set_language()
             
             # 等待页面加载
-            time.sleep(wait_time)
+            time.sleep(min(wait_time, 5))  # 限制最大等待时间
             
-            # 等待页面完全加载
-            WebDriverWait(self.driver, 10).until(
-                lambda driver: driver.execute_script("return document.readyState") == "complete"
-            )
-            
-            # 等待CSS和JavaScript完全加载
-            self._wait_for_page_fully_loaded()
-            
-            # 额外等待确保样式应用完成
-            time.sleep(2)
+            # 等待页面完全加载（带超时控制）
+            self._wait_for_page_fully_loaded(max_wait_time=20)
             
             # 确保输出目录存在
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -352,12 +442,11 @@ class ScreenshotCapture:
             logger.error(f"截图失败: {e}")
             raise
         finally:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
+            # 确保清理资源
+            self._cleanup_processes()
     
     def _capture_full_page(self, output_path: str, total_height: int, viewport_height: int):
-        """捕获完整页面截图"""
+        """捕获完整页面截图，优化内存使用"""
         try:
             # 滚动到顶部
             self.driver.execute_script("window.scrollTo(0, 0)")
@@ -365,8 +454,10 @@ class ScreenshotCapture:
             
             screenshots = []
             current_position = 0
+            max_screenshots = 10  # 限制最大截图数量以防止内存溢出
             
-            while current_position < total_height:
+            screenshot_count = 0
+            while current_position < total_height and screenshot_count < max_screenshots:
                 # 截取当前视口
                 screenshot = self.driver.get_screenshot_as_png()
                 screenshots.append(Image.open(io.BytesIO(screenshot)))
@@ -375,24 +466,37 @@ class ScreenshotCapture:
                 current_position += viewport_height
                 self.driver.execute_script(f"window.scrollTo(0, {current_position})")
                 time.sleep(0.5)
+                screenshot_count += 1
             
             # 拼接所有截图
             if len(screenshots) > 1:
                 total_width = screenshots[0].width
-                combined_image = Image.new('RGB', (total_width, total_height))
+                combined_height = sum(img.height for img in screenshots)
+                combined_image = Image.new('RGB', (total_width, combined_height))
                 
                 y_offset = 0
                 for img in screenshots:
                     combined_image.paste(img, (0, y_offset))
                     y_offset += img.height
+                    # 及时释放内存
+                    img.close()
                 
                 combined_image.save(output_path)
+                combined_image.close()
             else:
                 screenshots[0].save(output_path)
+                screenshots[0].close()
                 
         except Exception as e:
             logger.error(f"完整页面截图失败: {e}")
             raise
+        finally:
+            # 清理screenshots列表中的所有图像
+            for img in screenshots:
+                try:
+                    img.close()
+                except:
+                    pass
     
     def capture_element(self, url: str, selector: str, output_path: str,
                        device: str = 'desktop', wait_time: int = 3) -> str:
@@ -430,15 +534,10 @@ class ScreenshotCapture:
             # 设置语言
             self._set_language()
             
-            time.sleep(wait_time)
+            time.sleep(min(wait_time, 5))  # 限制最大等待时间
             
-            # 等待页面完全加载
-            WebDriverWait(self.driver, 10).until(
-                lambda driver: driver.execute_script("return document.readyState") == "complete"
-            )
-            
-            # 等待CSS和JavaScript完全加载
-            self._wait_for_page_fully_loaded()
+            # 等待页面完全加载（带超时控制）
+            self._wait_for_page_fully_loaded(max_wait_time=15)
             
             # 等待元素出现
             element = WebDriverWait(self.driver, 10).until(
@@ -460,9 +559,8 @@ class ScreenshotCapture:
             logger.error(f"元素截图失败: {e}")
             raise
         finally:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
+            # 确保清理资源
+            self._cleanup_processes()
 
     def capture_element_by_xpath(self, url: str, xpath: str, output_path: str,
                                 device: str = 'desktop', wait_time: int = 3) -> str:
@@ -552,9 +650,8 @@ class ScreenshotCapture:
             logger.error(f"URL: {url}")
             raise
         finally:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
+            # 确保清理资源
+            self._cleanup_processes()
 
     def capture_by_xpath(self, url: str, xpath: str = None, output_dir: str = '',
                         device: str = 'desktop', wait_time: int = 3) -> str:
