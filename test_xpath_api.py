@@ -8,13 +8,25 @@ import requests
 import json
 import time
 import os
+import sys
 from urllib.parse import quote
+
+# 添加项目根目录到 Python 路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from config.environment import get_api_base_url
+except ImportError:
+    # 如果环境配置不可用，则使用默认值
+    def get_api_base_url():
+        return "http://localhost:5001"
 
 def test_xpath_api():
     """测试XPath API功能"""
     
-    # API服务器地址
-    base_url = "http://localhost:5001"
+    # API服务器地址（动态获取）
+    base_url = get_api_base_url()
+    print(f"🌐 使用API服务器: {base_url}")
     
     print("🧪 开始测试XPath API功能...")
     

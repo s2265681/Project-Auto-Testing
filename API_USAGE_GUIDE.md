@@ -245,11 +245,30 @@ XPath是一种用于选择XML/HTML文档中节点的语言。相比CSS选择器�
 
 ## 🛠️ 开发和调试
 
+### 环境配置
+
+系统支持动态环境切换，通过环境变量 `ENVIRONMENT` 控制：
+
+**开发环境（默认）：**
+```bash
+export ENVIRONMENT=development
+# API服务器地址：http://localhost:5001
+```
+
+**生产环境：**
+```bash
+export ENVIRONMENT=production
+# API服务器地址：http://18.141.179.222:5001
+```
+
 ### 测试API
 
 ```bash
-# 测试健康检查
+# 测试健康检查（开发环境）
 curl http://localhost:5001/health
+
+# 测试健康检查（生产环境）
+curl http://18.141.179.222:5001/health
 
 # 测试完整工作流
 curl -X POST http://localhost:5001/api/execute-workflow \

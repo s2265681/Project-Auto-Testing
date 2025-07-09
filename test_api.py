@@ -7,9 +7,23 @@ import requests
 import json
 import time
 import sys
+import os
+
+# 添加项目根目录到 Python 路径
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+try:
+    from config.environment import get_api_base_url
+except ImportError:
+    # 如果环境配置不可用，则使用默认值
+    def get_api_base_url():
+        return "http://localhost:5001"
 
 class APITester:
-    def __init__(self, base_url="http://localhost:5001"):
+    def __init__(self, base_url=None):
+        # 如果没有指定base_url，则从环境配置获取
+        if base_url is None:
+            base_url = get_api_base_url()
         self.base_url = base_url
         self.session = requests.Session()
         self.session.headers.update({
@@ -232,8 +246,9 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='API功能测试脚本')
-    parser.add_argument('--url', default='http://localhost:5001', 
-                       help='API服务器地址 (默认: http://localhost:5001)')
+    default_url = get_api_base_url()
+    parser.add_argument('--url', default=default_url, 
+                       help=f'API服务器地址 (默认: {default_url})')
     parser.add_argument('--test', choices=['health', 'test-cases', 'comparison', 'workflow', 'all'],
                        default='all', help='要运行的测试类型')
     

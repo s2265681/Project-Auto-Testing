@@ -41,6 +41,45 @@ cp .env.example .env
 python main.py
 ```
 
+## 🌍 环境配置
+
+### 开发环境 vs 生产环境
+
+系统支持动态环境切换，通过 `ENVIRONMENT` 环境变量控制：
+
+**开发环境（默认）：**
+```bash
+export ENVIRONMENT=development
+# API服务器：http://localhost:5001
+```
+
+**生产环境：**
+```bash
+export ENVIRONMENT=production
+# API服务器：http://18.141.179.222:5001
+```
+
+### 环境变量说明
+
+项目需要以下环境变量：
+
+| 变量名 | 必需 | 说明 |
+|--------|------|------|
+| `FEISHU_APP_ID` | ✅ | 飞书应用ID |
+| `FEISHU_APP_SECRET` | ✅ | 飞书应用密钥 |
+| `FEISHU_VERIFICATION_TOKEN` | ❌ | 飞书验证令牌（可选） |
+| `GEMINI_API_KEY` | ✅ | Google Gemini API密钥 |
+| `FIGMA_ACCESS_TOKEN` | ✅ | Figma访问令牌 |
+| `ENVIRONMENT` | ❌ | 环境类型（development/production） |
+
+### 🚀 自动部署
+
+项目配置了GitHub Actions自动部署，当代码推送到 `main` 分支时自动部署到生产服务器。
+
+**部署目标：** `ubuntu@18.141.179.222:/var/www/app/product-auto-test`
+
+详细部署说明请参考 [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)。
+
 ## 项目结构
 ```
 Project-Aut-Testing/
@@ -404,3 +443,6 @@ Authorization Bearer {access_token}
 > 帮我增加一个参数，当测试类型testType值为功能测试的时候，只执行解析飞书文档，生成测试用例， 当测试类型testType为UI测试的时候，只执行对比网站和Figma的设计
 
 
+# 上线部署
+.github/workflows/
+deplaoy.sh 

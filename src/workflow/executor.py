@@ -5,6 +5,7 @@ Workflow Executor - Integrating PRD parsing, test case generation and visual com
 import os
 import time
 import json
+import sys
 from typing import Dict, List, Any, Optional
 from ..utils.logger import get_logger
 from ..feishu.client import FeishuClient
@@ -13,15 +14,28 @@ from ..screenshot.capture import ScreenshotCapture
 from ..figma.client import FigmaClient
 from ..visual_comparison.comparator import VisualComparator
 
+# 导入环境配置
+try:
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+    from config.environment import get_api_base_url
+except ImportError:
+    # 如果环境配置不可用，则使用默认值
+    def get_api_base_url():
+        return "http://localhost:5001"
+
 logger = get_logger(__name__)
 
-def get_image_url(file_path, base_url="http://localhost:5001"):
+def get_image_url(file_path, base_url=None):
     """
     获取图片的可访问URL
     Get accessible URL for image files
     """
     if not file_path or not os.path.exists(file_path):
         return None
+    
+    # 如果没有指定base_url，则从环境配置获取
+    if base_url is None:
+        base_url = get_api_base_url()
     
     # 获取相对于项目根目录的路径
     project_root = os.getcwd()
