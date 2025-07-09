@@ -26,17 +26,27 @@ check_command() {
 # 检查必要的工具
 check_command python3
 check_command pip3
-check_command rsync
+check_command aws
 
-# 设置 SSH key 路径（优先 CI 环境的 deploy_key，否则用本地 pem）
-SSH_KEY_PATH="$HOME/.ssh/deploy_key"
-LOCAL_KEY_PATH="/Users/mac/Github/aws-project-key2.pem"
-if [ -f "$SSH_KEY_PATH" ]; then
-    SSH_KEY_OPTION="-i $SSH_KEY_PATH"
-elif [ -f "$LOCAL_KEY_PATH" ]; then
-    SSH_KEY_OPTION="-i $LOCAL_KEY_PATH"
+# 设置EC2实例ID
+if [ -z "$EC2_INSTANCE_ID" ]; then
+    print_error "EC2_INSTANCE_ID 环境变量未设置!"
+    exit 1
+fi
+
+# 设置S3存储桶名称
+if [ -z "$S3_BUCKET_NAME" ]; then
+    S3_BUCKET_NAME="temp-deployment-bucket"
+    print_message "使用默认S3存储桶: $S3_BUCKET_NAME"
 else
-    print_error "SSH key not found at $SSH_KEY_PATH or $LOCAL_KEY_PATH!"
+    print_message "使用S3存储桶: $S3_BUCKET_NAME"
+fi
+
+print_message "使用EC2实例: $EC2_INSTANCE_ID"
+
+# 检查AWS连接
+if ! aws sts get-caller-identity &> /dev/null; then
+    print_error "AWS认证失败，请检查AWS凭证!"
     exit 1
 fi
 
@@ -51,25 +61,71 @@ fi
 
 # 创建远程目录
 print_message "创建远程目录..."
-ssh $SSH_KEY_OPTION ubuntu@18.141.179.222 "mkdir -p /var/www/app/product-auto-test"
+aws ssm send-command \
+    --instance-ids "$EC2_INSTANCE_ID" \
+    --document-name "AWS-RunShellScript" \
+    --parameters 'commands=["mkdir -p /var/www/app/product-auto-test"]' \
+    --output text --query 'Command.CommandId' > /tmp/command_id
 
-# 部署到 EC2 产品自动测试目录（排除不需要的文件）
-print_message "开始部署产品自动测试系统到 EC2..."
-rsync -avz --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' --exclude='logs' --exclude='reports' --exclude='screenshots' -e "ssh $SSH_KEY_OPTION" . ubuntu@18.141.179.222:/var/www/app/product-auto-test/
+# 等待命令完成
+sleep 2
+
+# 创建部署包
+print_message "创建部署包..."
+tar -czf /tmp/deploy.tar.gz --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' --exclude='logs' --exclude='reports' --exclude='screenshots' .
+
+# 上传文件到S3临时存储
+print_message "上传部署包到S3..."
+aws s3 cp /tmp/deploy.tar.gz s3://$S3_BUCKET_NAME/product-auto-test/deploy.tar.gz
+
+# 在EC2实例上下载并解压
+print_message "在EC2实例上下载并部署..."
+aws ssm send-command \
+    --instance-ids "$EC2_INSTANCE_ID" \
+    --document-name "AWS-RunShellScript" \
+    --parameters "commands=[
+        \"cd /var/www/app/product-auto-test\",
+        \"aws s3 cp s3://$S3_BUCKET_NAME/product-auto-test/deploy.tar.gz .\",
+        \"tar -xzf deploy.tar.gz\",
+        \"rm deploy.tar.gz\"
+    ]" \
+    --output text --query 'Command.CommandId' > /tmp/command_id
+
+# 等待命令完成
+sleep 5
 
 print_message "安装Python依赖和配置环境..."
-ssh $SSH_KEY_OPTION ubuntu@18.141.179.222 "cd /var/www/app/product-auto-test && pip3 install -r requirements.txt"
+aws ssm send-command \
+    --instance-ids "$EC2_INSTANCE_ID" \
+    --document-name "AWS-RunShellScript" \
+    --parameters 'commands=[
+        "cd /var/www/app/product-auto-test",
+        "pip3 install -r requirements.txt"
+    ]' \
+    --output text --query 'Command.CommandId' > /tmp/command_id
+
+# 等待命令完成
+sleep 10
 
 # 创建生产环境的.env文件
 print_message "创建生产环境配置文件..."
 if [ -n "$FEISHU_APP_ID" ] && [ -n "$FEISHU_APP_SECRET" ] && [ -n "$GEMINI_API_KEY" ] && [ -n "$FIGMA_ACCESS_TOKEN" ]; then
-    ssh $SSH_KEY_OPTION ubuntu@18.141.179.222 "cd /var/www/app/product-auto-test && cat > .env << EOF
+    aws ssm send-command \
+        --instance-ids "$EC2_INSTANCE_ID" \
+        --document-name "AWS-RunShellScript" \
+        --parameters "commands=[
+            \"cd /var/www/app/product-auto-test\",
+            \"cat > .env << EOF
 FEISHU_APP_ID=$FEISHU_APP_ID
 FEISHU_APP_SECRET=$FEISHU_APP_SECRET
 FEISHU_VERIFICATION_TOKEN=$FEISHU_VERIFICATION_TOKEN
 GEMINI_API_KEY=$GEMINI_API_KEY
 FIGMA_ACCESS_TOKEN=$FIGMA_ACCESS_TOKEN
-EOF"
+EOF\"
+        ]" \
+        --output text --query 'Command.CommandId' > /tmp/command_id
+    
+    sleep 2
     print_message "✅ 生产环境配置文件创建成功"
 else
     print_error "⚠️ 环境变量缺失，将使用现有的.env文件或环境变量"
@@ -77,6 +133,22 @@ fi
 
 # 重启后端服务
 print_message "重启产品自动测试服务..."
-ssh $SSH_KEY_OPTION ubuntu@18.141.179.222 "cd /var/www/app/product-auto-test && export ENVIRONMENT=production && pm2 restart product-auto-test || pm2 start api_server.py --name product-auto-test --interpreter python3"
+aws ssm send-command \
+    --instance-ids "$EC2_INSTANCE_ID" \
+    --document-name "AWS-RunShellScript" \
+    --parameters 'commands=[
+        "cd /var/www/app/product-auto-test",
+        "export ENVIRONMENT=production",
+        "pm2 restart product-auto-test || pm2 start api_server.py --name product-auto-test --interpreter python3"
+    ]' \
+    --output text --query 'Command.CommandId' > /tmp/command_id
+
+# 等待命令完成
+sleep 5
+
+# 清理临时文件
+print_message "清理临时文件..."
+rm -f /tmp/deploy.tar.gz
+aws s3 rm s3://$S3_BUCKET_NAME/product-auto-test/deploy.tar.gz
 
 print_message "部署完成！" 

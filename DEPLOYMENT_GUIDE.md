@@ -20,7 +20,10 @@
 在GitHub仓库设置中添加以下secrets：
 
 ```
-SSH_PRIVATE_KEY: 服务器SSH私钥内容
+AWS_ACCESS_KEY_ID: AWS访问密钥ID
+AWS_SECRET_ACCESS_KEY: AWS访问密钥Secret
+EC2_INSTANCE_ID: EC2实例ID (例如: i-1234567890abcdef0)
+S3_BUCKET_NAME: S3存储桶名称 (setup-aws-resources.sh脚本会生成)
 FEISHU_APP_ID: 飞书应用ID
 FEISHU_APP_SECRET: 飞书应用密钥
 FEISHU_VERIFICATION_TOKEN: 飞书验证令牌
@@ -28,15 +31,80 @@ GEMINI_API_KEY: Gemini API密钥
 FIGMA_ACCESS_TOKEN: Figma访问令牌
 ```
 
-**注意：** 这些secrets将在部署时自动创建生产环境的.env文件。
+**注意：** 
+- 使用AWS Systems Manager Session Manager代替SSH连接
+- 需要创建S3存储桶用于临时文件存储
+- 这些secrets将在部署时自动创建生产环境的.env文件
 
 ### 部署脚本
 
 - **文件位置：** `deploy.sh`
-- **功能：** 自动部署Python应用到服务器
+- **功能：** 通过AWS Systems Manager自动部署Python应用到EC2实例
+- **部署方式：** 使用S3临时存储 + SSM命令执行
 - **排除文件：** venv, __pycache__, *.pyc, .git, logs, reports, screenshots
 
 ## 🌍 环境配置
+
+### AWS环境设置
+
+#### 快速设置（推荐）
+
+使用提供的自动化脚本快速设置AWS资源：
+
+```bash
+chmod +x setup-aws-resources.sh
+./setup-aws-resources.sh
+```
+
+该脚本会自动：
+- 创建S3存储桶
+- 创建IAM角色和实例配置文件
+- 列出可用的EC2实例
+- 验证资源设置
+
+#### 手动设置
+
+**1. 创建S3存储桶**
+```bash
+aws s3 mb s3://temp-deployment-bucket --region ap-southeast-1
+```
+
+**2. 创建IAM角色**
+```bash
+# 创建角色
+aws iam create-role --role-name ProductAutoTestEC2Role --assume-role-policy-document file://trust-policy.json
+
+# 附加策略
+aws iam attach-role-policy --role-name ProductAutoTestEC2Role --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+aws iam attach-role-policy --role-name ProductAutoTestEC2Role --policy-arn arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+aws iam attach-role-policy --role-name ProductAutoTestEC2Role --policy-arn arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+# 创建实例配置文件
+aws iam create-instance-profile --instance-profile-name ProductAutoTestEC2Role
+aws iam add-role-to-instance-profile --instance-profile-name ProductAutoTestEC2Role --role-name ProductAutoTestEC2Role
+```
+
+**3. 确保EC2实例有适当的IAM角色**
+将创建的IAM角色附加到EC2实例：
+```bash
+aws ec2 associate-iam-instance-profile --instance-id i-1234567890abcdef0 --iam-instance-profile Name=ProductAutoTestEC2Role
+```
+
+**4. 安装SSM Agent（通常已预装）**
+```bash
+# Ubuntu/Debian
+sudo apt-get update
+sudo apt-get install amazon-ssm-agent
+
+# 启动服务
+sudo systemctl start amazon-ssm-agent
+sudo systemctl enable amazon-ssm-agent
+```
+
+**5. 验证SSM连接**
+```bash
+aws ssm describe-instance-information --filters "Key=InstanceIds,Values=i-1234567890abcdef0"
+```
 
 ### 动态环境切换
 
@@ -99,8 +167,10 @@ FIGMA_ACCESS_TOKEN=从GitHub Secrets获取
 
 - [ ] 代码已推送到 `main` 分支
 - [ ] GitHub Secrets 已配置（包括所有API密钥）
-- [ ] 生产服务器可访问
-- [ ] SSH密钥权限正确
+- [ ] AWS凭证权限正确
+- [ ] EC2实例ID正确且实例运行中
+- [ ] EC2实例已安装SSM Agent
+- [ ] S3存储桶已创建（运行setup-aws-resources.sh自动创建）
 - [ ] 本地.env文件包含所有必需的环境变量
 
 ### 部署后验证
@@ -142,25 +212,38 @@ ssh ubuntu@18.141.179.222 "cd /var/www/app/product-auto-test && python3 verify_d
 
 ### 手动验证步骤
 
-1. **检查服务状态**
+1. **检查EC2实例状态**
    ```bash
-   pm2 status product-auto-test
+   aws ec2 describe-instances --instance-ids i-1234567890abcdef0
    ```
 
-2. **检查API端点**
+2. **通过SSM检查服务状态**
+   ```bash
+   aws ssm send-command \
+     --instance-ids i-1234567890abcdef0 \
+     --document-name "AWS-RunShellScript" \
+     --parameters 'commands=["pm2 status product-auto-test"]'
+   ```
+
+3. **检查API端点**
    ```bash
    curl http://18.141.179.222:5001/health
    ```
 
-3. **检查环境变量**
+4. **通过SSM检查环境变量**
    ```bash
-   cd /var/www/app/product-auto-test
-   cat .env
+   aws ssm send-command \
+     --instance-ids i-1234567890abcdef0 \
+     --document-name "AWS-RunShellScript" \
+     --parameters 'commands=["cd /var/www/app/product-auto-test && cat .env"]'
    ```
 
-4. **检查日志**
+5. **通过SSM检查日志**
    ```bash
-   pm2 logs product-auto-test
+   aws ssm send-command \
+     --instance-ids i-1234567890abcdef0 \
+     --document-name "AWS-RunShellScript" \
+     --parameters 'commands=["pm2 logs product-auto-test --lines 50"]'
    ```
 
 ## 📊 服务管理
@@ -214,7 +297,14 @@ pm2 stop product-auto-test
 
 ## 📈 更新记录
 
-**v2.1.0 (当前版本)**
+**v2.2.0 (当前版本)**
+- ✅ 改用AWS Systems Manager Session Manager部署
+- ✅ 移除SSH私钥依赖，使用AWS Access Key
+- ✅ 添加S3临时存储支持
+- ✅ 提供自动化AWS资源设置脚本
+- ✅ 优化IAM角色和权限配置
+
+**v2.1.0**
 - ✅ 实现GitHub Actions自动部署
 - ✅ 添加动态环境配置支持
 - ✅ 优化部署脚本和流程

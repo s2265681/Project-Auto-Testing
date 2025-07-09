@@ -76,7 +76,13 @@ export ENVIRONMENT=production
 
 项目配置了GitHub Actions自动部署，当代码推送到 `main` 分支时自动部署到生产服务器。
 
-**部署目标：** `ubuntu@18.141.179.222:/var/www/app/product-auto-test`
+**部署方式：** AWS Systems Manager Session Manager + S3临时存储
+**部署目标：** EC2实例 `/var/www/app/product-auto-test`
+
+**所需AWS服务：**
+- EC2实例（已安装SSM Agent）
+- S3存储桶（临时文件存储）
+- IAM角色（EC2实例权限）
 
 详细部署说明请参考 [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)。
 
@@ -446,4 +452,4 @@ Authorization Bearer {access_token}
 # 上线部署
 .github/workflows/
 deplaoy.sh 
-gengxin2
+gengxin3
