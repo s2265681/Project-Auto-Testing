@@ -13,7 +13,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
       
-    - name: Setup SSH and Deploy
+    - name: Deploy to Server
       env:
         FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
         FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
@@ -25,281 +25,53 @@ jobs:
         SERVER_USER: ${{ secrets.SERVER_USER }}
         SSH_PORT: ${{ secrets.SSH_PORT }}
       run: |
-        set -e
-        
-        echo "🔧 开始部署准备..."
-        
-        # 验证必要的环境变量
-        echo "📋 验证环境变量..."
-        if [ -z "$SSH_PRIVATE_KEY" ]; then
-          echo "❌ SSH_PRIVATE_KEY 未设置"
-          exit 1
-        fi
-        if [ -z "$SERVER_HOST" ]; then
-          echo "❌ SERVER_HOST 未设置"
-          exit 1
-        fi
-        if [ -z "$SERVER_USER" ]; then
-          echo "❌ SERVER_USER 未设置"
-          exit 1
-        fi
-        
-        # 设置SSH端口（默认22）
-        SSH_PORT=${SSH_PORT:-22}
-        echo "📡 SSH端口: $SSH_PORT"
-        echo "✅ 环境变量验证通过"
-        
-        # 设置SSH（增强错误处理）
-        echo "🔑 设置SSH连接..."
+        # 设置SSH
         mkdir -p ~/.ssh
-        chmod 700 ~/.ssh
-        
-        # 写入SSH私钥
         echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -p ${SSH_PORT:-22} $SERVER_HOST >> ~/.ssh/known_hosts
         
-        # 验证私钥格式
-        if ! ssh-keygen -l -f ~/.ssh/id_rsa; then
-          echo "❌ SSH私钥格式无效"
-          exit 1
-        fi
-        echo "✅ SSH私钥验证通过"
+        # 打包代码
+        tar -czf app.tar.gz --exclude='.git' --exclude='venv' --exclude='__pycache__' .
         
-        # 创建SSH配置文件（增加超时时间）
-        cat > ~/.ssh/config << SSH_CONFIG
-        Host deploy-server
-            HostName $SERVER_HOST
-            User $SERVER_USER
-            Port $SSH_PORT
-            StrictHostKeyChecking no
-            UserKnownHostsFile /dev/null
-            IdentityFile ~/.ssh/id_rsa
-            ConnectTimeout 60
-            ServerAliveInterval 30
-            ServerAliveCountMax 3
-            TCPKeepAlive yes
-            Compression yes
-        SSH_CONFIG
-        chmod 600 ~/.ssh/config
-        echo "✅ SSH配置文件创建完成"
-        
-        # 测试网络连接
-        echo "🌐 测试网络连接..."
-        if ! nc -z -w10 "$SERVER_HOST" "$SSH_PORT"; then
-          echo "❌ 无法连接到服务器 $SERVER_HOST:$SSH_PORT"
-          echo "请检查："
-          echo "  1. 服务器地址是否正确"
-          echo "  2. SSH端口是否正确（当前: $SSH_PORT）"
-          echo "  3. 服务器是否在线"
-          echo "  4. 防火墙是否允许SSH连接"
-          exit 1
-        fi
-        echo "✅ 网络连接正常"
-        
-        # 多次尝试SSH连接
-        echo "🧪 测试SSH连接（多次重试）..."
-        SSH_SUCCESS=false
-        for i in {1..3}; do
-          echo "尝试连接 $i/3..."
-          if timeout 120 ssh deploy-server "echo 'SSH连接测试成功 - 尝试 $i'"; then
-            SSH_SUCCESS=true
-            break
-          else
-            echo "⚠️ 连接尝试 $i 失败，等待10秒后重试..."
-            sleep 10
-          fi
-        done
-        
-        if [ "$SSH_SUCCESS" = false ]; then
-          echo "❌ SSH连接失败（已尝试3次）"
-          echo "最后一次连接的详细调试信息："
-          timeout 120 ssh -vvv deploy-server "echo 'test'" 2>&1 || true
-          echo ""
-          echo "可能的解决方案："
-          echo "1. 检查服务器SSH配置是否正确"
-          echo "2. 确认SSH密钥已添加到服务器的authorized_keys"
-          echo "3. 检查服务器防火墙设置"
-          echo "4. 验证服务器SSH服务是否正常运行"
-          exit 1
-        fi
-        echo "✅ SSH连接测试成功"
-        
-        # 创建部署脚本（简化版本）
-        echo "📝 创建部署脚本..."
-        cat > deploy_script.sh << 'DEPLOY_EOF'
-        #!/bin/bash
-        set -e
-        
-        echo "🚀 开始服务器端部署..."
-        
-        # 显示系统信息
-        echo "📊 系统信息："
-        echo "  - 操作系统: $(uname -a)"
-        echo "  - Python版本: $(python3 --version 2>/dev/null || echo '未安装')"
-        echo "  - 当前用户: $(whoami)"
-        echo "  - 工作目录: $(pwd)"
-        
-        # 设置变量
-        APP_DIR="/var/www/app"
-        PROJECT_DIR="$APP_DIR/product-auto-test"
-        REPO_URL="https://github.com/s2265681/Project-Auto-Testing/archive/refs/heads/main.zip"
-        
-        # 创建应用目录
-        echo "📁 准备应用目录..."
-        sudo mkdir -p "$APP_DIR"
-        sudo chown "$USER:$USER" "$APP_DIR"
-        cd "$APP_DIR"
-        
-        # 备份现有版本（如果存在）
-        if [ -d "$PROJECT_DIR" ]; then
-          echo "📦 备份现有版本..."
-          sudo mv "$PROJECT_DIR" "${PROJECT_DIR}.backup.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
-        fi
-        
-        # 安装系统依赖
-        echo "📦 安装系统依赖..."
-        sudo apt update -qq
-        sudo apt install -y python3 python3-pip python3-venv git curl unzip netcat-openbsd
-        
-        # 下载最新代码
-        echo "⬇️ 下载项目代码..."
-        if ! curl -L -o main.zip "$REPO_URL"; then
-          echo "❌ 代码下载失败"
-          exit 1
-        fi
-        
-        if ! unzip -q main.zip; then
-          echo "❌ 代码解压失败"
-          exit 1
-        fi
-        
-        mv Project-Auto-Testing-main product-auto-test
-        rm main.zip
-        cd "$PROJECT_DIR"
-        echo "✅ 代码下载完成"
-        
-        # 显示项目文件
-        echo "📄 项目文件列表："
-        ls -la
-        
-        # 创建虚拟环境
-        echo "🐍 设置Python环境..."
-        if [ -d "venv" ]; then
-          rm -rf venv
-        fi
-        
-        python3 -m venv venv
-        source venv/bin/activate
-        
-        # 升级pip
-        pip install --upgrade pip
-        
-        # 安装依赖
-        if [ -f "requirements.txt" ]; then
-          echo "📚 安装Python依赖..."
-          echo "依赖文件内容："
-          cat requirements.txt
+        # 上传并部署
+        scp -P ${SSH_PORT:-22} app.tar.gz $SERVER_USER@$SERVER_HOST:/tmp/
+        ssh -p ${SSH_PORT:-22} $SERVER_USER@$SERVER_HOST << 'EOF'
+          # 部署代码
+          sudo mkdir -p /var/www/app
+          sudo chown $USER:$USER /var/www/app
+          cd /var/www/app
+          
+          # 备份旧版本
+          [ -d "current" ] && mv current backup-$(date +%Y%m%d-%H%M%S)
+          
+          # 解压新代码
+          mkdir current
+          tar -xzf /tmp/app.tar.gz -C current
+          cd current
+          
+          # 安装依赖
+          python3 -m venv venv
+          source venv/bin/activate
           pip install -r requirements.txt
-        else
-          echo "⚠️ 未找到requirements.txt，跳过依赖安装"
-        fi
-        
-        # 创建环境配置文件
-        echo "⚙️ 创建环境配置..."
-        cat > .env << ENV_CONFIG
+          
+          # 创建环境变量文件
+          cat > .env << 'ENV'
+        FEISHU_APP_ID=$FEISHU_APP_ID
+        FEISHU_APP_SECRET=$FEISHU_APP_SECRET
+        FEISHU_VERIFICATION_TOKEN=$FEISHU_VERIFICATION_TOKEN
+        GEMINI_API_KEY=$GEMINI_API_KEY
+        FIGMA_ACCESS_TOKEN=$FIGMA_ACCESS_TOKEN
         ENVIRONMENT=production
-        FEISHU_APP_ID=${FEISHU_APP_ID}
-        FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
-        FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
-        GEMINI_API_KEY=${GEMINI_API_KEY}
-        FIGMA_ACCESS_TOKEN=${FIGMA_ACCESS_TOKEN}
-        ENV_CONFIG
-        
-        # 设置权限
-        chmod 600 .env
-        echo "✅ 环境配置完成"
-        
-        # 检查主要文件
-        if [ ! -f "api_server.py" ]; then
-          echo "❌ api_server.py文件不存在"
-          echo "当前目录内容："
-          ls -la
-          exit 1
-        fi
-        echo "✅ 主要文件检查通过"
-        
-        # 安装并配置PM2
-        echo "🚀 配置PM2..."
-        if ! command -v node &> /dev/null; then
-          echo "安装Node.js..."
-          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-          sudo apt-get install -y nodejs
-        fi
-        
-        if ! command -v pm2 &> /dev/null; then
-          echo "安装PM2..."
-          sudo npm install -g pm2
-        fi
-        
-        # 停止现有服务
-        echo "🔄 重启应用服务..."
-        pm2 delete product-auto-test 2>/dev/null || true
-        
-        # 启动新服务
-        PYTHON_EXEC="$(pwd)/venv/bin/python"
-        echo "🐍 Python路径: $PYTHON_EXEC"
-        
-        if [ ! -f "$PYTHON_EXEC" ]; then
-          echo "❌ Python可执行文件不存在: $PYTHON_EXEC"
-          exit 1
-        fi
-        
-        # 启动PM2服务
-        echo "🚀 启动服务..."
-        pm2 start api_server.py --name product-auto-test --interpreter "$PYTHON_EXEC"
-        pm2 save
-        
-        echo "✅ PM2服务配置完成"
-        
-        # 验证服务
-        echo "🔍 验证服务状态..."
-        sleep 5
-        pm2 status
-        
-        # 检查服务是否正常运行
-        if ! pm2 list | grep product-auto-test | grep online > /dev/null; then
-          echo "❌ 服务启动失败，查看日志："
-          pm2 logs product-auto-test --lines 20
-          exit 1
-        fi
-        
-        # 检查端口是否监听
-        echo "🔍 检查端口监听..."
-        if netstat -tlnp | grep :5001; then
-          echo "✅ 端口5001正在监听"
-        else
-          echo "⚠️ 端口5001未监听，这可能不是问题"
-        fi
-        
-        echo "🎉 部署完成！"
-        echo "📍 服务器地址: http://${SERVER_HOST}:5001"
-        echo "📁 项目路径: $(pwd)"
-        echo "🔍 PM2状态: $(pm2 list | grep product-auto-test)"
-        
-        DEPLOY_EOF
-        
-        # 上传并执行部署脚本
-        echo "📤 上传部署脚本..."
-        scp deploy_script.sh deploy-server:/tmp/
-        
-        echo "🎯 执行远程部署..."
-        ssh deploy-server \
-          "export FEISHU_APP_ID='$FEISHU_APP_ID' && \
-           export FEISHU_APP_SECRET='$FEISHU_APP_SECRET' && \
-           export FEISHU_VERIFICATION_TOKEN='$FEISHU_VERIFICATION_TOKEN' && \
-           export GEMINI_API_KEY='$GEMINI_API_KEY' && \
-           export FIGMA_ACCESS_TOKEN='$FIGMA_ACCESS_TOKEN' && \
-           export SERVER_HOST='$SERVER_HOST' && \
-           bash /tmp/deploy_script.sh"
-        
-        echo "✨ 部署流程完成！" 
+        ENV
+          
+          # PM2 部署
+          pm2 delete product-auto-test 2>/dev/null || true
+          pm2 start api_server.py --name product-auto-test --interpreter $(pwd)/venv/bin/python
+          pm2 save
+          
+          # 清理临时文件
+          rm /tmp/app.tar.gz
+          
+          echo "✅ 部署完成！"
+        EOF 
