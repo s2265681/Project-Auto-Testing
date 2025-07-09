@@ -29,25 +29,92 @@ jobs:
         
         echo "🚀 开始部署..."
         
+        # 验证必要的环境变量
+        if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$SERVER_HOST" ] || [ -z "$SERVER_USER" ]; then
+          echo "❌ 缺少必要的环境变量"
+          echo "SSH_PRIVATE_KEY: $([ -n "$SSH_PRIVATE_KEY" ] && echo '已设置' || echo '未设置')"
+          echo "SERVER_HOST: $([ -n "$SERVER_HOST" ] && echo '已设置' || echo '未设置')"
+          echo "SERVER_USER: $([ -n "$SERVER_USER" ] && echo '已设置' || echo '未设置')"
+          exit 1
+        fi
+        
+        # 设置SSH端口
+        SSH_PORT=${SSH_PORT:-22}
+        echo "📡 SSH配置信息:"
+        echo "  - 服务器: $SERVER_HOST"
+        echo "  - 用户: $SERVER_USER" 
+        echo "  - 端口: $SSH_PORT"
+        
         # 设置SSH
-        echo "🔑 设置SSH连接..."
+        echo "🔑 配置SSH连接..."
         mkdir -p ~/.ssh
         echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
         
-        # 设置SSH端口
-        SSH_PORT=${SSH_PORT:-22}
-        echo "📡 SSH端口: $SSH_PORT"
+        # 验证私钥格式
+        if ! ssh-keygen -l -f ~/.ssh/id_rsa > /dev/null 2>&1; then
+          echo "❌ SSH私钥格式无效"
+          exit 1
+        fi
+        echo "✅ SSH私钥验证通过"
         
-        # 添加服务器到known_hosts
-        ssh-keyscan -p $SSH_PORT $SERVER_HOST >> ~/.ssh/known_hosts 2>/dev/null || true
+        # 网络连接测试
+        echo "🌐 测试网络连接..."
+        if ! timeout 10 bash -c "echo >/dev/tcp/$SERVER_HOST/$SSH_PORT" 2>/dev/null; then
+          echo "❌ 无法连接到 $SERVER_HOST:$SSH_PORT"
+          echo "🔍 诊断信息:"
+          echo "  - 请检查服务器地址是否正确"
+          echo "  - 请检查SSH端口是否正确"
+          echo "  - 请检查服务器防火墙设置"
+          echo "  - 请检查SSH服务是否运行"
+          
+          # 尝试ping测试
+          echo "📡 尝试ping测试..."
+          if ping -c 3 -W 5 "$SERVER_HOST" > /dev/null 2>&1; then
+            echo "✅ 服务器可以ping通"
+          else
+            echo "❌ 服务器无法ping通"
+          fi
+          exit 1
+        fi
+        echo "✅ 网络连接正常"
+        
+        # SSH配置
+        cat > ~/.ssh/config << 'SSH_CONFIG'
+        Host deploy-server
+            HostName ${SERVER_HOST}
+            User ${SERVER_USER}
+            Port ${SSH_PORT}
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            IdentityFile ~/.ssh/id_rsa
+            ConnectTimeout 30
+            ServerAliveInterval 60
+            ServerAliveCountMax 3
+            TCPKeepAlive yes
+        SSH_CONFIG
+        
+        # 替换配置文件中的变量
+        sed -i "s/\${SERVER_HOST}/$SERVER_HOST/g" ~/.ssh/config
+        sed -i "s/\${SERVER_USER}/$SERVER_USER/g" ~/.ssh/config  
+        sed -i "s/\${SSH_PORT}/$SSH_PORT/g" ~/.ssh/config
+        chmod 600 ~/.ssh/config
         
         # 测试SSH连接
         echo "🧪 测试SSH连接..."
-        if ! ssh -p $SSH_PORT -o ConnectTimeout=10 $SERVER_USER@$SERVER_HOST "echo 'SSH连接成功'"; then
+        if ! timeout 60 ssh deploy-server "echo 'SSH连接测试成功'"; then
           echo "❌ SSH连接失败"
+          echo "🔍 详细调试信息:"
+          timeout 30 ssh -vvv deploy-server "echo 'test'" 2>&1 || true
+          echo ""
+          echo "💡 可能的解决方案:"
+          echo "  1. 检查SSH密钥是否已添加到服务器authorized_keys"
+          echo "  2. 确认服务器用户名正确"
+          echo "  3. 检查服务器SSH配置文件"
+          echo "  4. 确认防火墙允许SSH连接"
           exit 1
         fi
+        echo "✅ SSH连接测试成功"
         
         # 打包代码
         echo "📦 打包代码..."
@@ -55,11 +122,11 @@ jobs:
         
         # 上传代码
         echo "📤 上传代码到服务器..."
-        scp -P $SSH_PORT app.tar.gz $SERVER_USER@$SERVER_HOST:/tmp/
+        scp app.tar.gz deploy-server:/tmp/
         
         # 执行远程部署
         echo "🎯 执行远程部署..."
-        ssh -p $SSH_PORT $SERVER_USER@$SERVER_HOST "
+        ssh deploy-server "
         set -e
         
         echo '🔧 开始服务器端部署...'
@@ -127,18 +194,7 @@ jobs:
           exit 1
         fi
         
-        # 安装或检查PM2
-        echo '🚀 配置PM2...'
-        if ! command -v pm2 &> /dev/null; then
-          echo '安装PM2...'
-          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
-          export NVM_DIR='\$HOME/.nvm'
-          [ -s '\$NVM_DIR/nvm.sh' ] && \. '\$NVM_DIR/nvm.sh'
-          nvm install node
-          npm install -g pm2
-        fi
-        
-        # PM2 部署
+        # PM2 部署 (简化版本，假设已安装)
         echo '🔄 重启PM2服务...'
         pm2 delete product-auto-test 2>/dev/null || true
         pm2 start api_server.py --name product-auto-test --interpreter \$(pwd)/venv/bin/python
@@ -154,7 +210,6 @@ jobs:
         
         echo '✅ 部署完成！'
         echo '📁 项目路径: '\$(pwd)
-        echo '🔍 服务状态: '\$(pm2 list | grep product-auto-test || echo '未找到服务')
         "
         
         echo "🎉 部署流程完成！" 
