@@ -48,7 +48,18 @@ ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $SER
   cd /var/www/app
   if [ -d 'product-auto-test' ]; then
     cd product-auto-test
-    git pull origin main
+    # 检查是否为有效的git仓库
+    if [ -d '.git' ] && git rev-parse --git-dir > /dev/null 2>&1; then
+      echo '🔄 更新现有仓库...'
+      git fetch origin
+      git reset --hard origin/main
+    else
+      echo '🚨 目录存在但不是有效的git仓库，重新克隆...'
+      cd ..
+      sudo rm -rf product-auto-test
+      git clone https://github.com/s2265681/Project-Auto-Testing.git product-auto-test
+      cd product-auto-test
+    fi
   else
     git clone https://github.com/s2265681/Project-Auto-Testing.git product-auto-test
     cd product-auto-test
