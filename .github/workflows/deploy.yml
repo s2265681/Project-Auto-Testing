@@ -1,3 +1,4 @@
+# 最新部署脚本 - 修复虚拟环境和退出代码问题 - 2024
 name: Deploy to Production
 
 on:
@@ -10,6 +11,12 @@ jobs:
     
     steps:
     - name: Deploy to Server
+      env:
+        FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+        FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+        FEISHU_VERIFICATION_TOKEN: ${{ secrets.FEISHU_VERIFICATION_TOKEN }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        FIGMA_ACCESS_TOKEN: ${{ secrets.FIGMA_ACCESS_TOKEN }}
       run: |
         # 设置SSH
         mkdir -p ~/.ssh
@@ -17,96 +24,134 @@ jobs:
         chmod 600 ~/.ssh/id_rsa
         ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
         
-        # 一键部署
-        ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
-          set -e  # 遇到错误立即退出
-          
-          echo '🚀 开始部署...'
-          
-          # 创建目录
-          sudo mkdir -p /var/www/app
-          sudo chown ubuntu:ubuntu /var/www/app
-          echo '✅ 目录创建完成'
-          
-          # 安装系统依赖（包含unzip）
-          sudo apt update -qq
-          sudo apt install -y python3-pip python3-venv git curl unzip
-          echo '✅ 系统依赖安装完成'
-          
-          # 下载代码
-          cd /var/www/app
-          rm -rf product-auto-test
-          wget -q https://github.com/s2265681/Project-Auto-Testing/archive/refs/heads/main.zip
-          unzip -q main.zip
-          mv Project-Auto-Testing-main product-auto-test
-          rm main.zip
-          cd product-auto-test
-          echo '✅ 代码下载完成'
-          
-          # 创建Python虚拟环境
-          echo '开始创建虚拟环境...'
-          python3 -m venv venv
-          echo '虚拟环境创建命令执行完成，检查结果...'
-          ls -la venv/
-          echo '检查venv/bin目录内容:'
+        # 创建部署脚本
+        cat > deploy_script.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        echo "🚀 开始部署..."
+        
+        # 创建目录
+        sudo mkdir -p /var/www/app
+        sudo chown ubuntu:ubuntu /var/www/app
+        echo "✅ 目录创建完成"
+        
+        # 安装系统依赖
+        echo "📦 更新系统包..."
+        sudo apt update -qq
+        sudo apt install -y python3-pip python3-venv git curl unzip
+        echo "✅ 系统依赖安装完成"
+        
+        # 下载代码
+        echo "📥 下载代码..."
+        cd /var/www/app
+        rm -rf product-auto-test
+        
+        if ! wget -q https://github.com/s2265681/Project-Auto-Testing/archive/refs/heads/main.zip; then
+          echo "❌ 代码下载失败"
+          exit 1
+        fi
+        
+        if ! unzip -q main.zip; then
+          echo "❌ 代码解压失败"
+          exit 1
+        fi
+        
+        mv Project-Auto-Testing-main product-auto-test
+        rm main.zip
+        cd product-auto-test
+        echo "✅ 代码下载完成"
+        
+        # 创建Python虚拟环境
+        echo "🐍 创建Python虚拟环境..."
+        if ! python3 -m venv venv; then
+          echo "❌ 虚拟环境创建失败"
+          exit 1
+        fi
+        
+        echo "虚拟环境创建成功，检查内容:"
+        ls -la venv/bin/
+        
+        # 查找正确的Python路径
+        if [ -f "venv/bin/python3" ]; then
+          PYTHON_PATH="$(pwd)/venv/bin/python3"
+          echo "✅ 找到Python路径: $PYTHON_PATH"
+        elif [ -f "venv/bin/python" ]; then
+          PYTHON_PATH="$(pwd)/venv/bin/python"
+          echo "✅ 找到Python路径: $PYTHON_PATH"
+        else
+          echo "❌ 未找到Python可执行文件"
           ls -la venv/bin/
-          echo '✅ 虚拟环境创建完成'
-          
-          # 查找正确的Python路径
-          if [ -f 'venv/bin/python3' ]; then
-            PYTHON_PATH='venv/bin/python3'
-            echo '✅ 找到Python路径: venv/bin/python3'
-          elif [ -f 'venv/bin/python' ]; then
-            PYTHON_PATH='venv/bin/python'
-            echo '✅ 找到Python路径: venv/bin/python'
-          else
-            echo '❌ 未找到Python可执行文件'
-            echo 'venv/bin目录内容:'
-            ls -la venv/bin/
-            exit 1
-          fi
-          
-          # 激活虚拟环境并安装依赖
-          source venv/bin/activate
-          echo '虚拟环境激活成功'
-          which python
-          python --version
-          pip install -r requirements.txt --quiet
-          echo '✅ Python依赖安装完成'
-          
-          # 创建环境文件
-          cat > .env << 'EOF'
-        ENVIRONMENT=production
-        FEISHU_APP_ID=${{ secrets.FEISHU_APP_ID }}
-        FEISHU_APP_SECRET=${{ secrets.FEISHU_APP_SECRET }}
-        FEISHU_VERIFICATION_TOKEN=${{ secrets.FEISHU_VERIFICATION_TOKEN }}
-        GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-        FIGMA_ACCESS_TOKEN=${{ secrets.FIGMA_ACCESS_TOKEN }}
+          exit 1
+        fi
+        
+        # 激活虚拟环境并安装依赖
+        echo "📚 安装Python依赖..."
+        source venv/bin/activate
+        
+        echo "虚拟环境激活成功"
+        which python
+        python --version
+        
+        if ! pip install -r requirements.txt --quiet; then
+          echo "❌ Python依赖安装失败"
+          exit 1
+        fi
+        echo "✅ Python依赖安装完成"
+        
+        # 创建环境文件
+        echo "⚙️ 创建环境配置..."
+        echo "ENVIRONMENT=production" > .env
+        echo "FEISHU_APP_ID=\${FEISHU_APP_ID}" >> .env
+        echo "FEISHU_APP_SECRET=\${FEISHU_APP_SECRET}" >> .env
+        echo "FEISHU_VERIFICATION_TOKEN=\${FEISHU_VERIFICATION_TOKEN}" >> .env
+        echo "GEMINI_API_KEY=\${GEMINI_API_KEY}" >> .env
+        echo "FIGMA_ACCESS_TOKEN=\${FIGMA_ACCESS_TOKEN}" >> .env
+        echo "✅ 环境文件创建完成"
+        
+        # 安装Node.js和PM2
+        echo "🚀 设置PM2..."
+        if ! command -v pm2 &> /dev/null; then
+          echo "安装Node.js和PM2..."
+          curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+          sudo apt-get install -y nodejs
+          sudo npm install -g pm2
+          echo "✅ Node.js和PM2安装完成"
+        else
+          echo "✅ PM2已存在"
+        fi
+        
+        # 重启服务
+        echo "🔄 重启PM2服务..."
+        pm2 delete product-auto-test 2>/dev/null || true
+        
+        # 使用绝对路径启动PM2
+        if ! pm2 start api_server.py --name product-auto-test --interpreter "$PYTHON_PATH"; then
+          echo "❌ PM2服务启动失败"
+          pm2 logs product-auto-test --lines 20
+          exit 1
+        fi
+        
+        pm2 save
+        echo "✅ PM2服务启动完成"
+        
+        # 验证服务状态
+        echo "🔍 验证服务状态..."
+        pm2 status
+        
+        echo "🎉 部署完成！"
+        echo "服务器地址: http://18.141.179.222:5001"
+        echo "当前目录: $(pwd)"
+        echo "部署成功！API服务正在运行"
         EOF
-          echo '✅ 环境文件创建完成'
-          
-          # 安装Node.js和PM2
-          if ! command -v pm2 &> /dev/null; then
-            curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-            sudo apt-get install -y nodejs
-            sudo npm install -g pm2
-            echo '✅ Node.js和PM2安装完成'
-          else
-            echo '✅ PM2已存在'
-          fi
-          
-          # 重启服务
-          pm2 delete product-auto-test 2>/dev/null || true
-          pm2 start api_server.py --name product-auto-test --interpreter \$PYTHON_PATH
-          pm2 save
-          echo '✅ PM2服务启动完成'
-          
-          # 最后的成功信息（关闭严格错误检查）
-          set +e
-          echo '🎉 部署完成！'
-          echo '服务器地址: http://18.141.179.222:5001'
-          echo '当前目录: '\$(pwd)''
-          pwd
-          echo '部署成功！API服务正在运行'
-          exit 0
-        " 
+        
+        # 传输并执行脚本
+        scp -o StrictHostKeyChecking=no deploy_script.sh ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/
+        
+        ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+          "FEISHU_APP_ID='$FEISHU_APP_ID' \
+           FEISHU_APP_SECRET='$FEISHU_APP_SECRET' \
+           FEISHU_VERIFICATION_TOKEN='$FEISHU_VERIFICATION_TOKEN' \
+           GEMINI_API_KEY='$GEMINI_API_KEY' \
+           FIGMA_ACCESS_TOKEN='$FIGMA_ACCESS_TOKEN' \
+           bash /tmp/deploy_script.sh" 
