@@ -23,11 +23,11 @@ jobs:
           sudo mkdir -p /var/www/app
           sudo chown ubuntu:ubuntu /var/www/app
           
-          # 安装系统依赖（先安装基础包）
+          # 安装系统依赖（包含unzip）
           sudo apt update -qq
-          sudo apt install -y python3-pip git curl
+          sudo apt install -y python3-pip python3-venv git curl unzip
           
-          # 使用wget下载代码包而不是git clone
+          # 使用wget下载代码包
           cd /var/www/app
           rm -rf product-auto-test
           wget -q https://github.com/s2265681/Project-Auto-Testing/archive/refs/heads/main.zip
@@ -36,8 +36,12 @@ jobs:
           rm main.zip
           cd product-auto-test
           
-          # 安装Python依赖
-          python3 -m pip install -r requirements.txt --user --quiet
+          # 创建Python虚拟环境
+          python3 -m venv venv
+          source venv/bin/activate
+          
+          # 安装Python依赖（在虚拟环境中）
+          pip install -r requirements.txt --quiet
           
           # 创建环境文件
           cat > .env << 'EOF'
@@ -49,20 +53,23 @@ jobs:
         FIGMA_ACCESS_TOKEN=${{ secrets.FIGMA_ACCESS_TOKEN }}
         EOF
           
-          # 安装Node.js和PM2（使用NVM避免依赖冲突）
+          # 安装Node.js和PM2
           if ! command -v pm2 &> /dev/null; then
             curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
             sudo apt-get install -y nodejs
             sudo npm install -g pm2
           fi
           
-          # 重启服务
+          # 重启服务（使用虚拟环境的Python）
           pm2 delete product-auto-test 2>/dev/null || true
-          pm2 start api_server.py --name product-auto-test --interpreter python3
+          pm2 start api_server.py --name product-auto-test --interpreter ./venv/bin/python
           pm2 save
           
           echo '🎉 部署完成！'
           echo '服务器地址: http://18.141.179.222:5001'
-          echo '当前目录: $(pwd)'
-          echo '文件列表: $(ls -la)'
+          echo '当前目录: \$(pwd)'
+          echo '文件列表:'
+          ls -la
+          echo '虚拟环境检查:'
+          ./venv/bin/python --version
         " 
