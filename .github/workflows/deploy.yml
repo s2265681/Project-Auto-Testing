@@ -65,7 +65,7 @@ jobs:
         fi
         echo "✅ SSH私钥验证通过"
         
-        # 创建SSH配置文件
+        # 创建SSH配置文件（增加超时时间）
         cat > ~/.ssh/config << SSH_CONFIG
         Host deploy-server
             HostName $SERVER_HOST
@@ -74,7 +74,11 @@ jobs:
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             IdentityFile ~/.ssh/id_rsa
-            ConnectTimeout 30
+            ConnectTimeout 60
+            ServerAliveInterval 30
+            ServerAliveCountMax 3
+            TCPKeepAlive yes
+            Compression yes
         SSH_CONFIG
         chmod 600 ~/.ssh/config
         echo "✅ SSH配置文件创建完成"
@@ -92,12 +96,30 @@ jobs:
         fi
         echo "✅ 网络连接正常"
         
-        # 测试SSH连接
-        echo "🧪 测试SSH连接..."
-        if ! ssh -o ConnectTimeout=30 deploy-server "echo 'SSH连接测试成功'"; then
-          echo "❌ SSH连接失败"
-          echo "调试信息："
-          ssh -v deploy-server "echo 'test'" 2>&1 || true
+        # 多次尝试SSH连接
+        echo "🧪 测试SSH连接（多次重试）..."
+        SSH_SUCCESS=false
+        for i in {1..3}; do
+          echo "尝试连接 $i/3..."
+          if timeout 120 ssh deploy-server "echo 'SSH连接测试成功 - 尝试 $i'"; then
+            SSH_SUCCESS=true
+            break
+          else
+            echo "⚠️ 连接尝试 $i 失败，等待10秒后重试..."
+            sleep 10
+          fi
+        done
+        
+        if [ "$SSH_SUCCESS" = false ]; then
+          echo "❌ SSH连接失败（已尝试3次）"
+          echo "最后一次连接的详细调试信息："
+          timeout 120 ssh -vvv deploy-server "echo 'test'" 2>&1 || true
+          echo ""
+          echo "可能的解决方案："
+          echo "1. 检查服务器SSH配置是否正确"
+          echo "2. 确认SSH密钥已添加到服务器的authorized_keys"
+          echo "3. 检查服务器防火墙设置"
+          echo "4. 验证服务器SSH服务是否正常运行"
           exit 1
         fi
         echo "✅ SSH连接测试成功"
