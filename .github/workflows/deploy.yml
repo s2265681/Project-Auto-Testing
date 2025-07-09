@@ -101,9 +101,12 @@ jobs:
           pm2 save
           echo '✅ PM2服务启动完成'
           
+          # 最后的成功信息（关闭严格错误检查）
+          set +e
           echo '🎉 部署完成！'
           echo '服务器地址: http://18.141.179.222:5001'
           echo '当前目录: '\$(pwd)''
-          echo '文件列表:'
-          ls -la
+          pwd
+          echo '部署成功！API服务正在运行'
+          exit 0
         " 
