@@ -1,48 +1,34 @@
-name: Deploy Product Auto Test System
+name: Deploy to Production
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Setup Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-        
-    - name: Install Python dependencies
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup SSH key
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ap-southeast-1
-
-    - name: Build and Deploy
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+    
+    - name: Deploy to EC2
+      run: |
+        chmod +x deploy.sh
+        ./deploy.sh
       env:
-        ENVIRONMENT: production
+        SERVER_HOST: ${{ secrets.SERVER_HOST }}
+        SERVER_USER: ${{ secrets.SERVER_USER }}
+        GITHUB_REPOSITORY: ${{ github.server_url }}/${{ github.repository }}.git
         FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
         FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         FEISHU_VERIFICATION_TOKEN: ${{ secrets.FEISHU_VERIFICATION_TOKEN }}
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        FIGMA_ACCESS_TOKEN: ${{ secrets.FIGMA_ACCESS_TOKEN }}
-        EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
-        S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
-      run: |
-        # 验证AWS连接
-        aws sts get-caller-identity
-        
-        # 执行部署脚本
-        chmod +x deploy.sh
-        ./deploy.sh 
+        FIGMA_ACCESS_TOKEN: ${{ secrets.FIGMA_ACCESS_TOKEN }} 

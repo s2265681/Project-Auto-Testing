@@ -24,85 +24,57 @@ check_command() {
 }
 
 # 检查必要的工具
-check_command python3
-check_command pip3
-check_command aws
+check_command ssh
 
-# 设置EC2实例ID
-if [ -z "$EC2_INSTANCE_ID" ]; then
-    print_error "EC2_INSTANCE_ID 环境变量未设置!"
+# 设置服务器信息
+if [ -z "$SERVER_HOST" ]; then
+    print_error "SERVER_HOST 环境变量未设置!"
     exit 1
 fi
 
-# 设置S3存储桶名称
-if [ -z "$S3_BUCKET_NAME" ]; then
-    S3_BUCKET_NAME="temp-deployment-bucket"
-    print_message "使用默认S3存储桶: $S3_BUCKET_NAME"
-else
-    print_message "使用S3存储桶: $S3_BUCKET_NAME"
+if [ -z "$SERVER_USER" ]; then
+    SERVER_USER="ubuntu"
 fi
 
-print_message "使用EC2实例: $EC2_INSTANCE_ID"
+# 设置GitHub仓库地址
+GITHUB_REPO="${GITHUB_REPOSITORY:-https://github.com/s2265681/Project-Aut-Testing.git}"
+APP_DIR="/var/www/app/product-auto-test"
 
-# 检查AWS连接
-if ! aws sts get-caller-identity &> /dev/null; then
-    print_error "AWS认证失败，请检查AWS凭证!"
+print_message "开始部署到服务器: $SERVER_HOST"
+
+# 测试SSH连接
+print_message "测试SSH连接..."
+if ! ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST "echo 'SSH连接测试成功'"; then
+    print_error "SSH连接失败，请检查服务器配置和密钥"
     exit 1
 fi
 
-# 检查Python依赖
-print_message "检查Python依赖..."
-if [ -f "requirements.txt" ]; then
-    print_message "requirements.txt 文件存在"
-else
-    print_error "requirements.txt 文件不存在"
-    exit 1
-fi
-
-# 创建远程目录
-print_message "创建远程目录..."
-aws ssm send-command \
-    --instance-ids "$EC2_INSTANCE_ID" \
-    --document-name "AWS-RunShellScript" \
-    --parameters 'commands=["mkdir -p /var/www/app/product-auto-test"]' \
-    --output text --query 'Command.CommandId' > /tmp/command_id
-
-# 等待命令完成
-sleep 2
-
-# 创建部署包
-print_message "创建部署包..."
-tar -czf /tmp/deploy.tar.gz --exclude='venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='.git' --exclude='logs' --exclude='reports' --exclude='screenshots' .
-
-# 上传文件到S3临时存储
-print_message "上传部署包到S3..."
-aws s3 cp /tmp/deploy.tar.gz s3://$S3_BUCKET_NAME/product-auto-test/deploy.tar.gz
-
-# 在EC2实例上下载并解压
-print_message "在EC2实例上下载并部署..."
-aws ssm send-command \
-    --instance-ids "$EC2_INSTANCE_ID" \
-    --document-name "AWS-RunShellScript" \
-    --parameters "commands=[
-        \"cd /var/www/app/product-auto-test\",
-        \"aws s3 cp s3://$S3_BUCKET_NAME/product-auto-test/deploy.tar.gz .\",
-        \"tar -xzf deploy.tar.gz\",
-        \"rm deploy.tar.gz\"
-    ]" \
-    --output text --query 'Command.CommandId' > /tmp/command_id
+# 创建部署目录并克隆/更新代码
+print_message "创建部署目录并更新代码..."
+ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << 'EOF'
+    sudo mkdir -p /var/www/app
+    sudo chown -R ubuntu:ubuntu /var/www/app
+    cd /var/www/app/product-auto-test
+    
+    if [ -d '.git' ]; then
+        echo "更新现有代码..."
+        git pull origin main
+    else
+        echo "克隆新代码..."
+        cd /var/www/app
+        git clone https://github.com/s2265681/Project-Aut-Testing.git product-auto-test
+    fi
+EOF
 
 # 等待命令完成
 sleep 5
 
-print_message "安装Python依赖和配置环境..."
-aws ssm send-command \
-    --instance-ids "$EC2_INSTANCE_ID" \
-    --document-name "AWS-RunShellScript" \
-    --parameters 'commands=[
-        "cd /var/www/app/product-auto-test",
-        "pip3 install -r requirements.txt"
-    ]' \
-    --output text --query 'Command.CommandId' > /tmp/command_id
+# 安装Python依赖
+print_message "安装Python依赖..."
+ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << 'EOF'
+    cd /var/www/app/product-auto-test
+    python3 -m pip install -r requirements.txt --user
+EOF
 
 # 等待命令完成
 sleep 10
@@ -110,45 +82,59 @@ sleep 10
 # 创建生产环境的.env文件
 print_message "创建生产环境配置文件..."
 if [ -n "$FEISHU_APP_ID" ] && [ -n "$FEISHU_APP_SECRET" ] && [ -n "$GEMINI_API_KEY" ] && [ -n "$FIGMA_ACCESS_TOKEN" ]; then
-    aws ssm send-command \
-        --instance-ids "$EC2_INSTANCE_ID" \
-        --document-name "AWS-RunShellScript" \
-        --parameters "commands=[
-            \"cd /var/www/app/product-auto-test\",
-            \"cat > .env << EOF
+    ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << EOF
+        cd /var/www/app/product-auto-test
+        cat > .env << 'ENVEOF'
+ENVIRONMENT=production
 FEISHU_APP_ID=$FEISHU_APP_ID
 FEISHU_APP_SECRET=$FEISHU_APP_SECRET
 FEISHU_VERIFICATION_TOKEN=$FEISHU_VERIFICATION_TOKEN
 GEMINI_API_KEY=$GEMINI_API_KEY
 FIGMA_ACCESS_TOKEN=$FIGMA_ACCESS_TOKEN
-EOF\"
-        ]" \
-        --output text --query 'Command.CommandId' > /tmp/command_id
+ENVEOF
+EOF
     
-    sleep 2
     print_message "✅ 生产环境配置文件创建成功"
 else
     print_error "⚠️ 环境变量缺失，将使用现有的.env文件或环境变量"
 fi
 
-# 重启后端服务
+# 重启应用服务
 print_message "重启产品自动测试服务..."
-aws ssm send-command \
-    --instance-ids "$EC2_INSTANCE_ID" \
-    --document-name "AWS-RunShellScript" \
-    --parameters 'commands=[
-        "cd /var/www/app/product-auto-test",
-        "export ENVIRONMENT=production",
-        "pm2 restart product-auto-test || pm2 start api_server.py --name product-auto-test --interpreter python3"
-    ]' \
-    --output text --query 'Command.CommandId' > /tmp/command_id
+ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << 'EOF'
+    cd /var/www/app/product-auto-test
+    export ENVIRONMENT=production
+    
+    # 停止现有服务
+    pm2 stop product-auto-test 2>/dev/null || true
+    
+    # 启动新服务
+    pm2 start api_server.py --name product-auto-test --interpreter python3
+    
+    # 保存PM2配置
+    pm2 save
+EOF
 
-# 等待命令完成
-sleep 5
+# 等待服务启动
+sleep 3
 
-# 清理临时文件
-print_message "清理临时文件..."
-rm -f /tmp/deploy.tar.gz
-aws s3 rm s3://$S3_BUCKET_NAME/product-auto-test/deploy.tar.gz
+# 验证部署状态
+print_message "验证部署状态..."
+ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << 'EOF'
+    echo "=== PM2状态 ==="
+    pm2 status
+    
+    echo ""
+    echo "=== 端口监听 ==="
+    ss -tlnp | grep :5001 || echo "端口5001未监听"
+    
+    echo ""
+    echo "=== 健康检查 ==="
+    sleep 2
+    curl -s http://localhost:5001/health || echo "健康检查失败，服务可能还在启动中"
+EOF
 
-print_message "部署完成！" 
+print_message "🎉 部署完成！"
+print_message "应用地址: http://$SERVER_HOST:5001"
+print_message "健康检查: http://$SERVER_HOST:5001/health"
+print_message "如果服务未响应，请等待30秒后再次尝试" 
