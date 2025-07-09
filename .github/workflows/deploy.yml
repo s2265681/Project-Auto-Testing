@@ -34,9 +34,12 @@ jobs:
       run: |
         # 设置 SSH key
         mkdir -p ~/.ssh
-        echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+        echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/deploy_key
         chmod 600 ~/.ssh/deploy_key
         ssh-keyscan -H 18.141.179.222 >> ~/.ssh/known_hosts
+        
+        # 验证SSH连接
+        ssh -i ~/.ssh/deploy_key -o ConnectTimeout=10 -o StrictHostKeyChecking=no ubuntu@18.141.179.222 "echo 'SSH连接验证成功'"
         
         # 执行部署脚本
         chmod +x deploy.sh
