@@ -37,8 +37,12 @@ jobs:
         mkdir -p ~/.ssh
         echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
         chmod 600 ~/.ssh/deploy_key
-        ssh-keyscan -H 18.141.179.222 >> ~/.ssh/known_hosts
+        
+        # 测试SSH连接
+        echo "🔍 测试SSH连接..."
+        ssh-keyscan -H 18.141.179.222 >> ~/.ssh/known_hosts 2>/dev/null || true
         
         # 执行部署脚本
         chmod +x deploy.sh
+        export SSH_KEY="~/.ssh/deploy_key"
         ./deploy.sh 

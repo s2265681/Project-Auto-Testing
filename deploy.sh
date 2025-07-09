@@ -4,25 +4,88 @@
 # 用法: ./deploy.sh
 
 # 配置
-SERVER="ubuntu@18.141.179.222"
+SERVER_IP="18.141.179.222"
 APP_DIR="/var/www/app/product-auto-test"
+SSH_KEY="~/.ssh/deploy_key"
 
 echo "🚀 开始部署到生产服务器..."
 
-# 一键部署
-ssh -o StrictHostKeyChecking=no $SERVER "
+# 尝试不同的用户名
+USERS=("ubuntu" "ec2-user" "admin" "root")
+CONNECTED=false
+
+for USER in "${USERS[@]}"; do
+  echo "🔍 尝试连接 ${USER}@${SERVER_IP}..."
+  
+  if ssh -i $SSH_KEY -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${USER}@${SERVER_IP} "echo 'SSH连接成功'" 2>/dev/null; then
+    echo "✅ 成功连接到 ${USER}@${SERVER_IP}"
+    SERVER="${USER}@${SERVER_IP}"
+    CONNECTED=true
+    break
+  else
+    echo "❌ 无法连接到 ${USER}@${SERVER_IP}"
+  fi
+done
+
+if [ "$CONNECTED" = false ]; then
+  echo "💥 无法连接到服务器，请检查："
+  echo "1. AWS安全组是否允许SSH (端口22)"
+  echo "2. EC2实例是否运行"
+  echo "3. 公网IP是否正确: $SERVER_IP"
+  echo "4. SSH密钥是否正确"
+  exit 1
+fi
+
+echo "🎯 使用用户: $SERVER"
+
+# 部署代码
+ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null $SERVER "
+  echo '📁 准备应用目录...'
+  sudo mkdir -p /var/www/app
+  sudo chown \$USER:\$USER /var/www/app
+  
   echo '📦 更新代码...'
-  cd $APP_DIR || { cd /var/www/app && git clone https://github.com/s2265681/Project-Aut-Testing.git product-auto-test && cd product-auto-test; }
-  git pull origin main
+  cd /var/www/app
+  if [ -d 'product-auto-test' ]; then
+    cd product-auto-test
+    git pull origin main
+  else
+    git clone https://github.com/s2265681/Project-Auto-Testing.git product-auto-test
+    cd product-auto-test
+  fi
+  
+  echo '🐍 设置Python环境...'
+  python3 -m venv venv 2>/dev/null || echo 'venv已存在'
+  source venv/bin/activate
+  pip install --upgrade pip
   
   echo '📚 安装依赖...'
-  python3 -m pip install -r requirements.txt --user --quiet
+  pip install -r requirements.txt
+  
+  echo '⚙️ 设置环境变量...'
+  cat > .env << EOF
+FEISHU_APP_ID=${FEISHU_APP_ID}
+FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+FEISHU_VERIFICATION_TOKEN=${FEISHU_VERIFICATION_TOKEN}
+GEMINI_API_KEY=${GEMINI_API_KEY}
+FIGMA_ACCESS_TOKEN=${FIGMA_ACCESS_TOKEN}
+ENVIRONMENT=production
+EOF
   
   echo '🔄 重启服务...'
-  pm2 restart product-auto-test || pm2 start api_server.py --name product-auto-test --interpreter python3
+  pm2 delete product-auto-test 2>/dev/null || echo '服务不存在，新建中...'
+  pm2 start api_server.py --name product-auto-test --interpreter \$(pwd)/venv/bin/python
   pm2 save
   
-  echo '✅ 部署完成！访问: http://18.141.179.222:5001'
+  echo '🔍 检查服务状态...'
+  pm2 status
+  
+  echo '✅ 部署完成！访问: http://${SERVER_IP}:5001'
 "
 
-echo "🎉 部署完成！" 
+if [ $? -eq 0 ]; then
+  echo "🎉 部署成功完成！"
+else
+  echo "💥 部署过程中出现错误"
+  exit 1
+fi 
