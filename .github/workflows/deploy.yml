@@ -1,4 +1,4 @@
-# 健壮的部署脚本 - 增强错误处理和调试 - 2024
+# 健壮的部署脚本 - 修复SSH连接和指纹问题 - 2024
 name: Deploy to Production
 
 on:
@@ -23,6 +23,7 @@ jobs:
         SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         SERVER_HOST: ${{ secrets.SERVER_HOST }}
         SERVER_USER: ${{ secrets.SERVER_USER }}
+        SSH_PORT: ${{ secrets.SSH_PORT }}
       run: |
         set -e
         
@@ -42,6 +43,10 @@ jobs:
           echo "❌ SERVER_USER 未设置"
           exit 1
         fi
+        
+        # 设置SSH端口（默认22）
+        SSH_PORT=${SSH_PORT:-22}
+        echo "📡 SSH端口: $SSH_PORT"
         echo "✅ 环境变量验证通过"
         
         # 设置SSH（增强错误处理）
@@ -60,20 +65,39 @@ jobs:
         fi
         echo "✅ SSH私钥验证通过"
         
-        # 添加服务器到known_hosts
-        echo "🌐 添加服务器指纹..."
-        ssh-keyscan -H "$SERVER_HOST" >> ~/.ssh/known_hosts || {
-          echo "❌ 无法连接到服务器获取指纹"
+        # 创建SSH配置文件
+        cat > ~/.ssh/config << SSH_CONFIG
+        Host deploy-server
+            HostName $SERVER_HOST
+            User $SERVER_USER
+            Port $SSH_PORT
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            IdentityFile ~/.ssh/id_rsa
+            ConnectTimeout 30
+        SSH_CONFIG
+        chmod 600 ~/.ssh/config
+        echo "✅ SSH配置文件创建完成"
+        
+        # 测试网络连接
+        echo "🌐 测试网络连接..."
+        if ! nc -z -w10 "$SERVER_HOST" "$SSH_PORT"; then
+          echo "❌ 无法连接到服务器 $SERVER_HOST:$SSH_PORT"
+          echo "请检查："
+          echo "  1. 服务器地址是否正确"
+          echo "  2. SSH端口是否正确（当前: $SSH_PORT）"
+          echo "  3. 服务器是否在线"
+          echo "  4. 防火墙是否允许SSH连接"
           exit 1
-        }
-        echo "✅ 服务器指纹添加成功"
+        fi
+        echo "✅ 网络连接正常"
         
         # 测试SSH连接
         echo "🧪 测试SSH连接..."
-        if ! ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_HOST" "echo 'SSH连接测试成功'"; then
+        if ! ssh -o ConnectTimeout=30 deploy-server "echo 'SSH连接测试成功'"; then
           echo "❌ SSH连接失败"
           echo "调试信息："
-          ssh -v -o ConnectTimeout=10 "$SERVER_USER@$SERVER_HOST" "echo 'test'" 2>&1 || true
+          ssh -v deploy-server "echo 'test'" 2>&1 || true
           exit 1
         fi
         echo "✅ SSH连接测试成功"
@@ -85,6 +109,13 @@ jobs:
         set -e
         
         echo "🚀 开始服务器端部署..."
+        
+        # 显示系统信息
+        echo "📊 系统信息："
+        echo "  - 操作系统: $(uname -a)"
+        echo "  - Python版本: $(python3 --version 2>/dev/null || echo '未安装')"
+        echo "  - 当前用户: $(whoami)"
+        echo "  - 工作目录: $(pwd)"
         
         # 设置变量
         APP_DIR="/var/www/app"
@@ -106,7 +137,7 @@ jobs:
         # 安装系统依赖
         echo "📦 安装系统依赖..."
         sudo apt update -qq
-        sudo apt install -y python3 python3-pip python3-venv git curl unzip
+        sudo apt install -y python3 python3-pip python3-venv git curl unzip netcat-openbsd
         
         # 下载最新代码
         echo "⬇️ 下载项目代码..."
@@ -125,6 +156,10 @@ jobs:
         cd "$PROJECT_DIR"
         echo "✅ 代码下载完成"
         
+        # 显示项目文件
+        echo "📄 项目文件列表："
+        ls -la
+        
         # 创建虚拟环境
         echo "🐍 设置Python环境..."
         if [ -d "venv" ]; then
@@ -140,6 +175,8 @@ jobs:
         # 安装依赖
         if [ -f "requirements.txt" ]; then
           echo "📚 安装Python依赖..."
+          echo "依赖文件内容："
+          cat requirements.txt
           pip install -r requirements.txt
         else
           echo "⚠️ 未找到requirements.txt，跳过依赖安装"
@@ -160,6 +197,15 @@ jobs:
         chmod 600 .env
         echo "✅ 环境配置完成"
         
+        # 检查主要文件
+        if [ ! -f "api_server.py" ]; then
+          echo "❌ api_server.py文件不存在"
+          echo "当前目录内容："
+          ls -la
+          exit 1
+        fi
+        echo "✅ 主要文件检查通过"
+        
         # 安装并配置PM2
         echo "🚀 配置PM2..."
         if ! command -v node &> /dev/null; then
@@ -179,48 +225,53 @@ jobs:
         
         # 启动新服务
         PYTHON_EXEC="$(pwd)/venv/bin/python"
+        echo "🐍 Python路径: $PYTHON_EXEC"
+        
         if [ ! -f "$PYTHON_EXEC" ]; then
           echo "❌ Python可执行文件不存在: $PYTHON_EXEC"
           exit 1
         fi
         
-        if [ ! -f "api_server.py" ]; then
-          echo "❌ api_server.py文件不存在"
-          ls -la
-          exit 1
-        fi
-        
         # 启动PM2服务
+        echo "🚀 启动服务..."
         pm2 start api_server.py --name product-auto-test --interpreter "$PYTHON_EXEC"
         pm2 save
-        pm2 startup
         
         echo "✅ PM2服务配置完成"
         
         # 验证服务
         echo "🔍 验证服务状态..."
-        sleep 3
+        sleep 5
         pm2 status
         
         # 检查服务是否正常运行
         if ! pm2 list | grep product-auto-test | grep online > /dev/null; then
-          echo "❌ 服务启动失败"
-          pm2 logs product-auto-test --lines 10
+          echo "❌ 服务启动失败，查看日志："
+          pm2 logs product-auto-test --lines 20
           exit 1
+        fi
+        
+        # 检查端口是否监听
+        echo "🔍 检查端口监听..."
+        if netstat -tlnp | grep :5001; then
+          echo "✅ 端口5001正在监听"
+        else
+          echo "⚠️ 端口5001未监听，这可能不是问题"
         fi
         
         echo "🎉 部署完成！"
         echo "📍 服务器地址: http://${SERVER_HOST}:5001"
         echo "📁 项目路径: $(pwd)"
+        echo "🔍 PM2状态: $(pm2 list | grep product-auto-test)"
         
         DEPLOY_EOF
         
         # 上传并执行部署脚本
         echo "📤 上传部署脚本..."
-        scp -o StrictHostKeyChecking=no deploy_script.sh "$SERVER_USER@$SERVER_HOST":/tmp/
+        scp deploy_script.sh deploy-server:/tmp/
         
         echo "🎯 执行远程部署..."
-        ssh -o StrictHostKeyChecking=no "$SERVER_USER@$SERVER_HOST" \
+        ssh deploy-server \
           "export FEISHU_APP_ID='$FEISHU_APP_ID' && \
            export FEISHU_APP_SECRET='$FEISHU_APP_SECRET' && \
            export FEISHU_VERIFICATION_TOKEN='$FEISHU_VERIFICATION_TOKEN' && \
