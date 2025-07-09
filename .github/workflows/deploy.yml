@@ -19,11 +19,23 @@ jobs:
         
         # 一键部署
         ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+          # 创建目录
+          sudo mkdir -p /var/www/app
+          sudo chown ubuntu:ubuntu /var/www/app
+          
           # 更新代码
-          cd /var/www/app/product-auto-test || { cd /var/www/app && git clone https://github.com/s2265681/Project-Aut-Testing.git product-auto-test && cd product-auto-test; }
+          cd /var/www/app
+          if [ ! -d 'product-auto-test' ]; then
+            git clone https://github.com/s2265681/Project-Aut-Testing.git product-auto-test
+          fi
+          cd product-auto-test
           git pull origin main
           
-          # 安装依赖
+          # 安装系统依赖
+          sudo apt update -qq
+          sudo apt install -y python3-pip nodejs npm
+          
+          # 安装Python依赖
           python3 -m pip install -r requirements.txt --user --quiet
           
           # 创建环境文件
@@ -36,9 +48,16 @@ jobs:
         FIGMA_ACCESS_TOKEN=${{ secrets.FIGMA_ACCESS_TOKEN }}
         EOF
           
+          # 安装和配置PM2
+          if ! command -v pm2 &> /dev/null; then
+            sudo npm install -g pm2
+          fi
+          
           # 重启服务
-          pm2 restart product-auto-test || pm2 start api_server.py --name product-auto-test --interpreter python3
+          pm2 delete product-auto-test 2>/dev/null || true
+          pm2 start api_server.py --name product-auto-test --interpreter python3
           pm2 save
           
-          echo '�� 部署完成！'
+          echo '🎉 部署完成！'
+          echo '服务器地址: http://18.141.179.222:5001'
         " 
