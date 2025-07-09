@@ -33,7 +33,8 @@ pytest-html>=4.1.0
 # 日志和工具
 loguru>=0.7.0
 click>=8.1.0
-rich>=13.0.0
+rich>=1.0.0
+psutil>=5.9.0
 
 # Web框架
 Flask>=2.3.0
