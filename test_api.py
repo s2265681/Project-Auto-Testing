@@ -20,15 +20,12 @@ except ImportError:
         return "http://localhost:5001"
 
 class APITester:
-    def __init__(self, base_url=None):
-        # 如果没有指定base_url，则从环境配置获取
-        if base_url is None:
-            base_url = get_api_base_url()
+    def __init__(self, base_url="http://18.141.179.222:5001"):
         self.base_url = base_url
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
-            'User-Agent': 'API-Tester/1.0'
+            'Accept': 'application/json'
         })
 
     def test_health(self):
@@ -84,15 +81,16 @@ class APITester:
 
     def test_visual_comparison(self, 
                              figma_url="https://www.figma.com/design/VHgFAzQGYpZtOgYJxk609O/25%E5%85%A8%E5%B1%80%E8%BF%AD%E4%BB%A3?node-id=6862-67131&m=dev",
-                             web_url="https://www.kalodata.com/product"):
+                             web_url="@https://www.kalodata.com/product:/html/body/div[1]/div/div[2]/div[1]/div/div[4]/div[2]/div/div[1]/div[2]/div[1]/div[1]/div/div/span"):
         """测试视觉比较"""
         print("👁️  测试视觉比较...")
+        print(f"🎨 Figma URL: {figma_url}")
+        print(f"🌐 Website URL: {web_url}")
         try:
             payload = {
                 "figmaUrl": figma_url,
                 "webUrl": web_url,
-                "device": "desktop",
-                "websiteClasses": "ant-input-affix-wrapper css-2yep4o ant-input-outlined w-[599px]"
+                "device": "desktop"
             }
             
             response = self.session.post(
@@ -104,7 +102,10 @@ class APITester:
                 data = response.json()
                 if data.get('success'):
                     print("✅ 视觉比较成功")
-                    print(f"   相似度: {data['data'].get('similarity_score', 0):.3f}")
+                    comp_result = data.get('data', {}).get('comparison_result', {})
+                    print(f"   相似度: {comp_result.get('similarity_score', 0):.3f}")
+                    print(f"   SSIM: {comp_result.get('ssim_score', 0):.3f}")
+                    print(f"   MSE: {comp_result.get('mse_score', 0):.3f}")
                     print(f"   输出目录: {data['data'].get('output_directory')}")
                     return True
                 else:
@@ -246,7 +247,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='API功能测试脚本')
-    default_url = get_api_base_url()
+    default_url = "http://18.141.179.222:5001"
     parser.add_argument('--url', default=default_url, 
                        help=f'API服务器地址 (默认: {default_url})')
     parser.add_argument('--test', choices=['health', 'test-cases', 'comparison', 'workflow', 'all'],

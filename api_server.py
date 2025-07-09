@@ -648,6 +648,13 @@ def execute_comparison():
         
         logger.info(f"执行视觉比较: figmaUrl={figma_url}, webUrl={website_url}, xpath={xpath_selector}")
         
+        # 检查工作流执行器是否初始化
+        if workflow_executor is None:
+            return jsonify({
+                "success": False,
+                "error": "工作流执行器未初始化，请检查服务器配置"
+            }), 500
+        
         # 清理旧报告（只保留最新的一个）
         cleanup_old_reports("reports")
         
@@ -720,6 +727,13 @@ def generate_test_cases():
             }), 400
         
         logger.info(f"生成测试用例: docToken={doc_token}")
+        
+        # 检查工作流执行器是否初始化
+        if workflow_executor is None:
+            return jsonify({
+                "success": False,
+                "error": "工作流执行器未初始化，请检查服务器配置"
+            }), 500
         
         # 生成测试用例
         test_cases_result = workflow_executor._generate_test_cases_from_prd(doc_token)
