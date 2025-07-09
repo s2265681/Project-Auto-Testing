@@ -19,15 +19,21 @@ jobs:
         
         # 一键部署
         ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+          set -e  # 遇到错误立即退出
+          
+          echo '🚀 开始部署...'
+          
           # 创建目录
           sudo mkdir -p /var/www/app
           sudo chown ubuntu:ubuntu /var/www/app
+          echo '✅ 目录创建完成'
           
           # 安装系统依赖（包含unzip）
           sudo apt update -qq
           sudo apt install -y python3-pip python3-venv git curl unzip
+          echo '✅ 系统依赖安装完成'
           
-          # 使用wget下载代码包
+          # 下载代码
           cd /var/www/app
           rm -rf product-auto-test
           wget -q https://github.com/s2265681/Project-Auto-Testing/archive/refs/heads/main.zip
@@ -35,13 +41,16 @@ jobs:
           mv Project-Auto-Testing-main product-auto-test
           rm main.zip
           cd product-auto-test
+          echo '✅ 代码下载完成'
           
           # 创建Python虚拟环境
           python3 -m venv venv
-          source venv/bin/activate
+          echo '✅ 虚拟环境创建完成'
           
-          # 安装Python依赖（在虚拟环境中）
+          # 激活虚拟环境并安装依赖
+          source venv/bin/activate
           pip install -r requirements.txt --quiet
+          echo '✅ Python依赖安装完成'
           
           # 创建环境文件
           cat > .env << 'EOF'
@@ -52,24 +61,37 @@ jobs:
         GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
         FIGMA_ACCESS_TOKEN=${{ secrets.FIGMA_ACCESS_TOKEN }}
         EOF
+          echo '✅ 环境文件创建完成'
           
           # 安装Node.js和PM2
           if ! command -v pm2 &> /dev/null; then
             curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
             sudo apt-get install -y nodejs
             sudo npm install -g pm2
+            echo '✅ Node.js和PM2安装完成'
+          else
+            echo '✅ PM2已存在'
           fi
           
-          # 重启服务（使用虚拟环境的Python）
+          # 检查虚拟环境
+          if [ -f './venv/bin/python' ]; then
+            echo '✅ 虚拟环境Python路径存在'
+            ./venv/bin/python --version
+          else
+            echo '❌ 虚拟环境Python路径不存在'
+            ls -la venv/bin/
+            exit 1
+          fi
+          
+          # 重启服务
           pm2 delete product-auto-test 2>/dev/null || true
           pm2 start api_server.py --name product-auto-test --interpreter ./venv/bin/python
           pm2 save
+          echo '✅ PM2服务启动完成'
           
           echo '🎉 部署完成！'
           echo '服务器地址: http://18.141.179.222:5001'
-          echo '当前目录: \$(pwd)'
+          echo '当前目录: '\$(pwd)''
           echo '文件列表:'
           ls -la
-          echo '虚拟环境检查:'
-          ./venv/bin/python --version
         " 
