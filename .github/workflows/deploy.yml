@@ -9,32 +9,36 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-      
-    - name: Setup SSH key
+    - name: Deploy to Server
       run: |
+        # 设置SSH
         mkdir -p ~/.ssh
         echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
-        chmod 700 ~/.ssh
-        
-        # 添加服务器到known_hosts
         ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
         
-        # 测试SSH连接
-        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "echo 'SSH key setup successful'"
-    
-    - name: Deploy to EC2
-      run: |
-        chmod +x deploy.sh
-        ./deploy.sh
-      env:
-        SERVER_HOST: ${{ secrets.SERVER_HOST }}
-        SERVER_USER: ${{ secrets.SERVER_USER }}
-        GITHUB_REPOSITORY: ${{ github.server_url }}/${{ github.repository }}.git
-        FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
-        FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-        FEISHU_VERIFICATION_TOKEN: ${{ secrets.FEISHU_VERIFICATION_TOKEN }}
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        FIGMA_ACCESS_TOKEN: ${{ secrets.FIGMA_ACCESS_TOKEN }} 
+        # 一键部署
+        ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "
+          # 更新代码
+          cd /var/www/app/product-auto-test || { cd /var/www/app && git clone https://github.com/s2265681/Project-Aut-Testing.git product-auto-test && cd product-auto-test; }
+          git pull origin main
+          
+          # 安装依赖
+          python3 -m pip install -r requirements.txt --user --quiet
+          
+          # 创建环境文件
+          cat > .env << 'EOF'
+        ENVIRONMENT=production
+        FEISHU_APP_ID=${{ secrets.FEISHU_APP_ID }}
+        FEISHU_APP_SECRET=${{ secrets.FEISHU_APP_SECRET }}
+        FEISHU_VERIFICATION_TOKEN=${{ secrets.FEISHU_VERIFICATION_TOKEN }}
+        GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+        FIGMA_ACCESS_TOKEN=${{ secrets.FIGMA_ACCESS_TOKEN }}
+        EOF
+          
+          # 重启服务
+          pm2 restart product-auto-test || pm2 start api_server.py --name product-auto-test --interpreter python3
+          pm2 save
+          
+          echo '�� 部署完成！'
+        " 
