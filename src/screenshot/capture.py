@@ -6,6 +6,8 @@ import os
 import time
 import signal
 import psutil
+import tempfile
+import uuid
 from typing import Dict, List, Optional, Tuple
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -48,6 +50,7 @@ class ScreenshotCapture:
         self.language = language
         self.driver = None
         self.chrome_process_id = None  # 跟踪Chrome进程ID
+        self.temp_user_data_dir = None  # 跟踪临时用户数据目录
         
     def _get_optimized_chrome_options(self) -> ChromeOptions:
         """获取优化的Chrome选项以减少内存和CPU使用"""
@@ -55,6 +58,14 @@ class ScreenshotCapture:
         
         if self.headless:
             options.add_argument('--headless=new')  # 使用新的headless模式
+        
+        # 创建唯一的用户数据目录
+        self.temp_user_data_dir = tempfile.mkdtemp(prefix='chrome_user_data_')
+        options.add_argument(f'--user-data-dir={self.temp_user_data_dir}')
+        
+        # 创建唯一的临时目录
+        temp_dir = tempfile.mkdtemp(prefix='chrome_temp_')
+        options.add_argument(f'--temp-dir={temp_dir}')
         
         # 基础优化选项
         options.add_argument('--no-sandbox')
@@ -94,6 +105,7 @@ class ScreenshotCapture:
                 }
             })
         
+        logger.info(f"设置Chrome用户数据目录: {self.temp_user_data_dir}")
         return options
         
     def _setup_driver(self, device_size: Tuple[int, int] = None, device_type: str = 'desktop'):
@@ -188,6 +200,17 @@ class ScreenshotCapture:
                     logger.warning(f"清理Chrome进程时出错: {e}")
                 finally:
                     self.chrome_process_id = None
+            
+            # 清理临时用户数据目录
+            if self.temp_user_data_dir and os.path.exists(self.temp_user_data_dir):
+                try:
+                    import shutil
+                    shutil.rmtree(self.temp_user_data_dir)
+                    logger.info(f"已清理Chrome用户数据目录: {self.temp_user_data_dir}")
+                except Exception as e:
+                    logger.warning(f"清理Chrome用户数据目录时出错: {e}")
+                finally:
+                    self.temp_user_data_dir = None
             
             # 清理所有遗留的Chrome进程（额外保险措施）
             self._kill_orphaned_chrome_processes()
