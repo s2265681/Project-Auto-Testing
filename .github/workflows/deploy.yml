@@ -27,8 +27,13 @@ jobs:
       run: npm install -g pnpm
       
     - name: 🔨 Build Frontend
+      working-directory: src/chat_assistant/frontend
       run: |
-        cd src/chat_assistant/frontend
+        # 显示当前目录和文件
+        pwd
+        ls -la
+        
+        # 安装依赖
         pnpm install
         
         # 创建生产环境配置
@@ -39,6 +44,11 @@ jobs:
         VITE_DEBUG=false
         EOF
         
+        # 显示关键文件
+        echo "=== Checking key files ==="
+        ls -la index.html src/main.tsx
+        
+        # 构建项目
         pnpm build
         
     - name: 🗂️ Prepare Deployment Files

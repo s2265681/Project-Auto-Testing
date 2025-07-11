@@ -48,13 +48,6 @@ export default defineConfig(({ mode }) => {
           },
         },
       },
-      // 压缩配置
-      terserOptions: {
-        compress: {
-          drop_console: mode === 'production', // 生产环境移除console
-          drop_debugger: true,
-        },
-      },
     },
     
     // 预览服务配置（用于生产构建预览）
