@@ -175,7 +175,6 @@ logs/
 
 # Reports
 reports/
-*.html
 *.png
 *.jpg
 *.jpeg
