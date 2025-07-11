@@ -18,6 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image
 import io
 import re
+import shutil
 
 from ..utils.logger import get_logger
 
@@ -632,6 +633,10 @@ class ScreenshotCapture:
         Returns:
             保存的文件路径
         """
+        # 新增：准备 reports 目录
+        reports_dir = os.path.dirname(output_path)
+        if os.path.basename(reports_dir) == "reports":
+            self._prepare_reports_dir(reports_dir)
         try:
             # 确保设备类型不为空，默认为desktop
             device = device or 'desktop'
@@ -1218,3 +1223,21 @@ class ScreenshotCapture:
             logger.warning(f"构建文件名失败: {e}")
             # 返回默认文件名
             return f"element_{element_index}_{device}.png" 
+
+    def _prepare_reports_dir(self, reports_dir: str):
+        """
+        确保 reports 目录存在，并在每次执行前清空目录内容。
+        """
+        if os.path.exists(reports_dir):
+            # 清空目录内容
+            for filename in os.listdir(reports_dir):
+                file_path = os.path.join(reports_dir, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    logger.warning(f"清理 {file_path} 失败: {e}")
+        else:
+            os.makedirs(reports_dir, exist_ok=True) 
