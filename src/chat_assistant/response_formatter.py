@@ -349,7 +349,9 @@ class ResponseFormatter:
                     # 尝试从Flask request中获取当前的host和scheme
                     from flask import request, has_request_context
                     if has_request_context():
-                        base_url = f"{request.scheme}://{request.host}"
+                        # 强制端口为5001
+                        host = request.host.split(':')[0]
+                        base_url = f"{request.scheme}://{host}:5001"
                         logger.info(f"从Flask request获取base_url: {base_url}")
                     else:
                         # 没有request上下文时的fallback
