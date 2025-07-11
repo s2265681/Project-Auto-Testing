@@ -217,6 +217,8 @@ class ResponseFormatter:
                 # 转换为可访问的URL
                 image_url = self._convert_to_accessible_url(diff_image_path)
                 if image_url:
+                    # 确保URL中没有反斜杠
+                    image_url = image_url.replace('\\', '')
                     response += f"{self.emoji_map['image']} **对比图像:**\n\n"
                     response += f"![差异对比图]({image_url})\n\n"
                 else:
@@ -236,6 +238,8 @@ class ResponseFormatter:
                     file_path = os.path.join(output_dir, file)
                     file_url = self._convert_to_accessible_url(file_path)
                     if file_url:
+                        # 确保URL中没有反斜杠
+                        file_url = file_url.replace('\\', '')
                         if file.endswith('.json') and 'report' in file.lower():
                             json_files.append((file, file_url))
                         elif file.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
@@ -331,41 +335,18 @@ class ResponseFormatter:
             return None
         
         try:
-            # 获取相对于项目根目录的路径
-            project_root = os.getcwd()
+            # 获取相对路径
+            rel_path = os.path.relpath(file_path, os.getcwd()) if os.path.isabs(file_path) else file_path
             
-            # 如果file_path已经是相对路径，直接使用
-            if not os.path.isabs(file_path):
-                rel_path = file_path
-            else:
-                rel_path = os.path.relpath(file_path, project_root)
-            
-            # 将Windows路径分隔符转换为URL格式
+            # 统一使用正斜杠
             url_path = rel_path.replace('\\', '/')
             
-            # 动态获取base_url
+            # 获取 base_url 并确保没有反斜杠
             if not base_url:
-                try:
-                    # 尝试从Flask request中获取当前的host和scheme
-                    from flask import request, has_request_context
-                    if has_request_context():
-                        # 强制端口为5001
-                        host = request.host.split(':')[0]
-                        base_url = f"{request.scheme}://{host}:5001"
-                        logger.info(f"从Flask request获取base_url: {base_url}")
-                    else:
-                        # 没有request上下文时的fallback
-                        base_url = self._get_fallback_base_url()
-                        logger.info(f"使用fallback base_url: {base_url}")
-                except ImportError:
-                    # Flask不可用时的fallback
-                    base_url = self._get_fallback_base_url()
-                    logger.info(f"Flask不可用，使用fallback base_url: {base_url}")
+                base_url = self._get_fallback_base_url()
+            base_url = base_url.rstrip('/').replace('\\', '')
             
-            # 确保base_url不以斜杠结尾
-            base_url = base_url.rstrip('/')
-            
-            # 构建完整URL (使用静态文件服务路径)
+            # 构建最终URL
             final_url = f"{base_url}/files/{url_path}"
             
             logger.info(f"URL转换: {file_path} -> {final_url}")
