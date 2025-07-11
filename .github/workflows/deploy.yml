@@ -26,18 +26,11 @@ jobs:
     - name: 📦 Install pnpm
       run: npm install -g pnpm
       
-    - name: 🗄️ Setup pnpm cache
-      uses: actions/cache@v4
-      with:
-        path: ~/.pnpm-store
-        key: ${{ runner.os }}-pnpm-${{ hashFiles('src/chat_assistant/frontend/pnpm-lock.yaml') }}
-        restore-keys: |
-          ${{ runner.os }}-pnpm-
-      
     - name: 🔨 Build Frontend
       run: |
         cd src/chat_assistant/frontend
-        pnpm install
+        pnpm config set store-dir ~/.pnpm-store
+        pnpm install --frozen-lockfile
         
         # 创建生产环境配置
         cat > .env.production << EOF
