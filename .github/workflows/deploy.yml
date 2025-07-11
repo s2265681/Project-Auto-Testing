@@ -29,8 +29,7 @@ jobs:
     - name: 🔨 Build Frontend
       run: |
         cd src/chat_assistant/frontend
-        pnpm config set store-dir ~/.pnpm-store
-        pnpm install --frozen-lockfile
+        pnpm install
         
         # 创建生产环境配置
         cat > .env.production << EOF
