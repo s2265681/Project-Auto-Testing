@@ -12,7 +12,6 @@ import {
 import { cn } from '../utils';
 import { ChatStatus } from '../types';
 import { chatApi } from '../services/api';
-import { toast } from 'react-hot-toast';
 
 interface ChatHeaderProps {
   title?: string;

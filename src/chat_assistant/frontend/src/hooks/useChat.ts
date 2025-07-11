@@ -38,11 +38,7 @@ export function useChat(): UseChatReturn {
     return newMessage;
   }, []);
 
-  const updateMessage = useCallback((id: string, updates: Partial<ChatMessage>) => {
-    setMessages(prev => prev.map(msg => 
-      msg.id === id ? { ...msg, ...updates } : msg
-    ));
-  }, []);
+
 
   const addTypingIndicator = useCallback(() => {
     return addMessage({
@@ -63,7 +59,7 @@ export function useChat(): UseChatReturn {
     setLoadingState({ isLoading: true, message: '发送消息中...' });
 
     // Add user message
-    const userMessage = addMessage({
+    addMessage({
       content: content.trim(),
       role: 'user',
       device: device, // 保存设备信息
@@ -121,7 +117,7 @@ export function useChat(): UseChatReturn {
       removeTypingIndicator(typingMessage.id);
 
       // Add assistant response
-      const assistantMessage = addMessage({
+      addMessage({
         content: response.message,
         role: 'assistant',
         metadata: {
