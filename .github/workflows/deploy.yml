@@ -107,9 +107,13 @@ jobs:
           echo "🐍 设置Python环境..."
           python3 -m venv venv 2>/dev/null || echo 'venv已存在'
           source venv/bin/activate
-          pip install --upgrade pip
-          pip install -r requirements.txt
           
+          echo "⬆️ 升级pip..."
+          pip install --upgrade pip
+          
+          echo "📦 安装Python依赖..."
+          pip install --no-cache-dir -r requirements.txt
+         
           echo "⚙️ 设置环境变量..."
           cat > .env << 'ENVEOF'
           FEISHU_APP_ID=${{ secrets.FEISHU_APP_ID }}
@@ -122,8 +126,18 @@ jobs:
           
           echo "🔄 重启后端服务..."
           pm2 delete product-auto-test 2>/dev/null || echo '服务不存在，新建中...'
-          pm2 start api_server.py --name product-auto-test --interpreter $(pwd)/venv/bin/python
+          
+          echo "📍 确认Python解释器路径..."
+          PYTHON_PATH=$(pwd)/venv/bin/python
+          echo "Python path: $PYTHON_PATH"
+          $PYTHON_PATH --version
+          
+          echo "🚀 启动PM2服务..."
+          pm2 start api_server.py --name product-auto-test --interpreter $PYTHON_PATH
           pm2 save
+          
+          echo "📊 检查PM2状态..."
+          pm2 status
           
           echo "✅ 部署完成！"
           

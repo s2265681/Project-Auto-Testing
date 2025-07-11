@@ -48,7 +48,26 @@ export function throttle<T extends (...args: any[]) => void>(
 }
 
 export function copyToClipboard(text: string): Promise<void> {
-  return navigator.clipboard.writeText(text);
+  if (navigator.clipboard && window.isSecureContext) {
+    // HTTPS 下使用 clipboard API
+    return navigator.clipboard.writeText(text);
+  } else {
+    // HTTP 下用 textarea + execCommand
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed'; // 防止页面滚动
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+      document.execCommand('copy');
+    } catch (err) {
+      return Promise.reject(err);
+    } finally {
+      document.body.removeChild(textarea);
+    }
+    return Promise.resolve();
+  }
 }
 
 export function downloadAsFile(content: string, filename: string, type = 'text/plain'): void {
