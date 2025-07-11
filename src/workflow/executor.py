@@ -9,6 +9,7 @@ import sys
 import signal
 import psutil
 import threading
+import shutil
 from typing import Dict, List, Any, Optional
 from ..utils.logger import get_logger
 from ..feishu.client import FeishuClient
@@ -170,53 +171,25 @@ class WorkflowExecutor:
     
     def _cleanup_old_reports(self, reports_dir: str):
         """
-        清理旧的报告目录，只保留最新的一个
-        Clean up old report directories, keep only the latest one
+        每次视觉对比前，清空 reports 目录下所有 comparison_* 文件夹，保证只保留本次新生成的一个
         """
-        try:
-            if not os.path.exists(reports_dir):
-                return
-                
-            # 获取所有comparison_开头的目录
-            comparison_dirs = []
-            for item in os.listdir(reports_dir):
-                item_path = os.path.join(reports_dir, item)
-                if os.path.isdir(item_path) and item.startswith('comparison_'):
-                    try:
-                        # 提取时间戳
-                        timestamp_str = item.replace('comparison_', '')
-                        timestamp = int(timestamp_str)
-                        comparison_dirs.append((timestamp, item_path))
-                    except ValueError:
-                        # 如果无法解析时间戳，跳过
-                        logger.warning(f"无法解析目录时间戳: {item}")
-                        continue
-            
-            # 如果没有旧目录，直接返回
-            if len(comparison_dirs) <= 1:
-                return
-            
-            # 按时间戳排序，保留最新的，删除其他的
-            comparison_dirs.sort(key=lambda x: x[0], reverse=True)  # 降序排列，最新的在前
-            
-            # 删除除最新的之外的所有目录
-            dirs_to_delete = comparison_dirs[1:]  # 跳过第一个（最新的）
-            
-            import shutil
-            for timestamp, dir_path in dirs_to_delete:
-                try:
-                    logger.info(f"删除旧报告目录: {dir_path}")
-                    shutil.rmtree(dir_path)
-                except Exception as e:
-                    logger.warning(f"删除目录失败 {dir_path}: {e}")
-            
-            if dirs_to_delete:
-                logger.info(f"已清理 {len(dirs_to_delete)} 个旧报告目录，保留最新的报告")
-            
-        except Exception as e:
-            logger.warning(f"清理旧报告时出错: {e}")
-            # 清理失败不应该影响主流程
-        
+        if not os.path.exists(reports_dir):
+            os.makedirs(reports_dir, exist_ok=True)
+            return
+
+        # 找到所有 comparison_ 开头的文件夹，全部删除
+        comparison_dirs = [
+            os.path.join(reports_dir, d)
+            for d in os.listdir(reports_dir)
+            if d.startswith("comparison_") and os.path.isdir(os.path.join(reports_dir, d))
+        ]
+        for old_dir in comparison_dirs:
+            try:
+                shutil.rmtree(old_dir)
+            except Exception as e:
+    
+                logger.warning(f"删除旧对比目录失败: {old_dir}, {e}")
+    
     def execute_button_click(self, 
                            app_token: str,
                            table_id: str, 

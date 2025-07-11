@@ -374,7 +374,7 @@ class ResponseFormatter:
             return None
     
     def _get_fallback_base_url(self) -> str:
-        """获取fallback的base URL"""
+        """获取fallback的base URL，始终带5001端口"""
         # 优先从环境变量获取
         env_url = os.getenv('SERVER_BASE_URL')
         if env_url:
@@ -384,7 +384,7 @@ class ResponseFormatter:
         if self._is_local_development():
             return 'http://localhost:5001'
         
-        # 生产环境默认值
+        # 生产环境默认值，始终带5001端口
         return 'http://18.141.179.222:5001'
     
     def _is_local_development(self) -> bool:
