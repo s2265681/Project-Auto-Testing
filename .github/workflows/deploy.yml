@@ -22,10 +22,17 @@ jobs:
       uses: actions/setup-node@v4
       with:
         node-version: ${{ env.NODE_VERSION }}
-        cache: 'npm'
         
     - name: 📦 Install pnpm
       run: npm install -g pnpm
+      
+    - name: 🗄️ Setup pnpm cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.pnpm-store
+        key: ${{ runner.os }}-pnpm-${{ hashFiles('src/chat_assistant/frontend/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-
       
     - name: 🔨 Build Frontend
       run: |
