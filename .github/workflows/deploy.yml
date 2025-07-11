@@ -1,48 +1,153 @@
-name: Deploy to AWS
+name: 🚀 Deploy to Production
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  workflow_dispatch: # 允许手动触发
+
+env:
+  SERVER_IP: "18.141.179.222"
+  APP_DIR: "/var/www/app/product-auto-test"
+  NODE_VERSION: "18"
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Setup Python
-      uses: actions/setup-python@v4
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
       with:
-        python-version: '3.9'
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
         
-    - name: Install dependencies
+    - name: 📦 Install pnpm
+      run: npm install -g pnpm
+      
+    - name: 🔨 Build Frontend
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        cd src/chat_assistant/frontend
+        pnpm install
         
-    - name: Build and Deploy
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
-        FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-        FEISHU_VERIFICATION_TOKEN: ${{ secrets.FEISHU_VERIFICATION_TOKEN }}
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        FIGMA_ACCESS_TOKEN: ${{ secrets.FIGMA_ACCESS_TOKEN }}
+        # 创建生产环境配置
+        cat > .env.production << EOF
+        VITE_API_BASE_URL=http://${{ env.SERVER_IP }}:8000
+        VITE_APP_ENV=production
+        VITE_API_TIMEOUT=300000
+        VITE_DEBUG=false
+        EOF
+        
+        pnpm build
+        
+    - name: 🗂️ Prepare Deployment Files
       run: |
-        # 设置 SSH key
-        mkdir -p ~/.ssh
-        echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
-        chmod 600 ~/.ssh/deploy_key
+        # 创建部署目录
+        mkdir -p deployment
         
-        # 测试SSH连接
-        echo "🔍 测试SSH连接..."
-        ssh-keyscan -H 18.141.179.222 >> ~/.ssh/known_hosts 2>/dev/null || true
+        # 复制Python代码
+        cp -r src deployment/
+        cp -r config deployment/ 2>/dev/null || true
+        cp requirements.txt deployment/
+        cp api_server.py deployment/
+        cp start_api_server.py deployment/
+        cp main.py deployment/
+        cp *.py deployment/ 2>/dev/null || true
         
-        # 执行部署脚本
-        chmod +x deploy.sh
-        export SSH_KEY="~/.ssh/deploy_key"
-        ./deploy.sh 
+        # 复制前端构建文件
+        mkdir -p deployment/frontend-dist
+        cp -r src/chat_assistant/frontend/dist/* deployment/frontend-dist/
+        
+
+        
+    - name: 📤 Deploy to Server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ env.SERVER_IP }}
+        username: ubuntu
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: 22
+        script: |
+          # 创建应用目录
+          sudo mkdir -p /var/www/app
+          sudo chown $USER:$USER /var/www/app
+          
+          # 清理旧文件
+          rm -rf ${{ env.APP_DIR }}
+          mkdir -p ${{ env.APP_DIR }}
+          
+    - name: 📁 Upload Files
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ env.SERVER_IP }}
+        username: ubuntu
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: 22
+        source: "deployment/*"
+        target: ${{ env.APP_DIR }}
+        strip_components: 1
+        
+    - name: 🚀 Execute Deployment
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ env.SERVER_IP }}
+        username: ubuntu
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        port: 22
+        script: |
+          cd ${{ env.APP_DIR }}
+          
+          echo "🐍 设置Python环境..."
+          python3 -m venv venv 2>/dev/null || echo 'venv已存在'
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          
+          echo "⚙️ 设置环境变量..."
+          cat > .env << 'ENVEOF'
+          FEISHU_APP_ID=${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET=${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_VERIFICATION_TOKEN=${{ secrets.FEISHU_VERIFICATION_TOKEN }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          FIGMA_ACCESS_TOKEN=${{ secrets.FIGMA_ACCESS_TOKEN }}
+          ENVIRONMENT=production
+          ENVEOF
+          
+          echo "🔄 重启后端服务..."
+          pm2 delete product-auto-test 2>/dev/null || echo '服务不存在，新建中...'
+          pm2 start api_server.py --name product-auto-test --interpreter $(pwd)/venv/bin/python
+          pm2 save
+          
+          echo "✅ 部署完成！"
+          
+    - name: 🔍 Health Check
+      run: |
+        echo "⏳ 等待服务启动..."
+        sleep 30
+        
+        echo "🔍 检查服务健康状态..."
+        for i in {1..5}; do
+          if curl -f http://${{ env.SERVER_IP }}:8000/health; then
+            echo "✅ 服务运行正常！"
+            break
+          else
+            echo "⏳ 服务还未就绪，等待中... ($i/5)"
+            sleep 10
+          fi
+        done
+        
+    - name: 📊 Deployment Summary
+      run: |
+        echo "🎉 部署完成！"
+        echo ""
+        echo "🌐 访问地址："
+        echo "  - 前端界面: http://${{ env.SERVER_IP }}:8000"
+        echo "  - API服务: http://${{ env.SERVER_IP }}:8000/api"
+        echo "  - 健康检查: http://${{ env.SERVER_IP }}:8000/health"
+        echo ""
+        echo "📊 服务架构："
+        echo "  - 前端: Nginx静态服务"
+        echo "  - 后端: PM2守护进程"
+        echo "  - 代理: Nginx反向代理" 

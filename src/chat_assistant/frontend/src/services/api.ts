@@ -7,39 +7,55 @@ import {
   ConversationContext, 
   ApiError 
 } from '../types';
+import { config, logConfig, getApiUrl } from '../config';
 
 class ChatApi {
   private api: AxiosInstance;
 
   constructor() {
     this.api = axios.create({
-      baseURL: '/api',
-      timeout: 300000, // 5分钟超时，适应长时间的视觉对比任务
+      baseURL: getApiUrl(),
+      timeout: config.apiTimeout,
       headers: {
         'Content-Type': 'application/json',
       },
     });
 
     this.setupInterceptors();
+    
+    // 输出配置信息
+    logConfig();
   }
 
   private setupInterceptors(): void {
     // Request interceptor
     this.api.interceptors.request.use(
-      (config) => {
+      (requestConfig) => {
         // Add timestamp to prevent caching
-        config.params = {
-          ...config.params,
+        requestConfig.params = {
+          ...requestConfig.params,
           _t: Date.now(),
         };
-        return config;
+        
+        // 在调试模式下输出请求详情
+        if (config.debug) {
+          console.log('📤 API请求:', requestConfig.url, requestConfig.data);
+        }
+        
+        return requestConfig;
       },
       (error) => Promise.reject(error)
     );
 
     // Response interceptor
     this.api.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        // 在调试模式下输出响应详情
+        if (config.debug) {
+          console.log('📥 API响应:', response.config.url, response.data);
+        }
+        return response;
+      },
       (error: AxiosError) => {
         const apiError: ApiError = {
           message: error.message || '网络请求失败',
@@ -59,6 +75,11 @@ class ChatApi {
           apiError.message = '请求超时，可能是因为任务正在后台处理中。如果是视觉对比等长时间任务，请耐心等待或稍后重试';
         } else if (!error.response) {
           apiError.message = '网络连接失败，请检查网络设置';
+        }
+
+        // 在调试模式下输出错误详情
+        if (config.debug) {
+          console.error('❌ API错误:', error.config?.url, apiError);
         }
 
         return Promise.reject(apiError);
