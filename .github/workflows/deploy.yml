@@ -44,10 +44,6 @@ jobs:
         VITE_DEBUG=false
         EOF
         
-        # 显示关键文件
-        echo "=== Checking key files ==="
-        ls -la index.html src/main.tsx
-        
         # 构建项目
         pnpm build
         
