@@ -112,7 +112,10 @@ def convert_local_path_to_url(file_path, base_url=None):
             # 动态获取当前请求的host和scheme
             try:
                 from flask import request
-                return f"{request.scheme}://{request.host}/files/{url_path}"
+                host = request.host.split(':')[0].replace('\\', '')
+                base_url = f"{request.scheme}://{host}:5001"
+                base_url = base_url.replace('\\', '')
+                return f"{base_url}/files/{url_path}"
             except:
                 # 如果无法获取request信息，使用智能fallback
                 fallback_base = _get_smart_base_url()
