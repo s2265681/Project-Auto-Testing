@@ -53,31 +53,26 @@ class ScreenshotCapture:
         self.temp_user_data_dir = None  # 跟踪临时用户数据目录
         
     def _get_optimized_chrome_options(self) -> ChromeOptions:
-        """获取优化的Chrome选项以减少内存和CPU使用"""
+        """获取优化的Chrome选项，保持稳定性优先"""
         options = ChromeOptions()
         
         if self.headless:
-            options.add_argument('--headless=new')  # 使用新的headless模式
+            options.add_argument('--headless=new')
         
         # 创建唯一的用户数据目录
         self.temp_user_data_dir = tempfile.mkdtemp(prefix='chrome_user_data_')
         options.add_argument(f'--user-data-dir={self.temp_user_data_dir}')
         
-        # 创建唯一的临时目录
-        temp_dir = tempfile.mkdtemp(prefix='chrome_temp_')
-        options.add_argument(f'--temp-dir={temp_dir}')
-        
-        # 基础优化选项
+        # 基础稳定选项
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
         options.add_argument('--disable-extensions')
         options.add_argument('--disable-plugins')
-        options.add_argument('--disable-images')  # 禁用图片加载以节省内存
         
-        # 内存优化选项
+        # 适度的内存优化（保守策略）
         options.add_argument('--memory-pressure-off')
-        options.add_argument('--max_old_space_size=2048')  # 限制V8内存使用
+        options.add_argument('--max_old_space_size=4096')  # 4GB内存限制，更保守
         options.add_argument('--disable-background-timer-throttling')
         options.add_argument('--disable-backgrounding-occluded-windows')
         options.add_argument('--disable-renderer-backgrounding')
@@ -92,7 +87,10 @@ class ScreenshotCapture:
         # 网络和安全优化
         options.add_argument('--disable-web-security')
         options.add_argument('--disable-features=TranslateUI')
-        options.add_argument('--disable-ipc-flooding-protection')
+        options.add_argument('--no-first-run')
+        options.add_argument('--no-default-browser-check')
+        options.add_argument('--disable-notifications')
+        options.add_argument('--disable-popup-blocking')
         
         # 设置浏览器语言偏好
         if self.language:
@@ -104,6 +102,10 @@ class ScreenshotCapture:
                     'geolocation': 2,    # 禁用地理位置
                 }
             })
+        
+        # 禁用自动化检测
+        options.add_experimental_option("useAutomationExtension", False)
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
         
         logger.info(f"设置Chrome用户数据目录: {self.temp_user_data_dir}")
         return options
@@ -128,7 +130,7 @@ class ScreenshotCapture:
                         "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1"
                     }
                     options.add_experimental_option("mobileEmulation", mobile_emulation)
-                    logger.info("设置移动设备仿真: iPhone 6")
+                    logger.info(f"设置移动设备仿真: {device_type}")  # 显示具体设备类型
                 elif device_size:
                     options.add_argument(f'--window-size={device_size[0]},{device_size[1]}')
                 
@@ -156,10 +158,22 @@ class ScreenshotCapture:
             # 为非移动设备设置窗口尺寸
             if device_type != 'mobile' and device_size:
                 self.driver.set_window_size(device_size[0], device_size[1])
+            
+            # # 为所有设备类型设置适度的超时时间
+            # if device_type in ['mobile', 'iphone', 'android']:
+            #     # 移动设备可能需要更长的加载时间
+            #     page_load_timeout = 60  # 60秒
+            #     implicit_wait_timeout = 20  # 20秒
+            #     script_timeout = 30  # 30秒
+            # else:
+            #     # 桌面设备
+            #     page_load_timeout = 60  # 60秒  
+            #     implicit_wait_timeout = 20  # 20秒
+            #     script_timeout = 30  # 30秒
                 
-                # 设置页面加载超时
-                self.driver.set_page_load_timeout(30)  # 30秒超时
-                self.driver.implicitly_wait(10)  # 隐式等待10秒
+            # self.driver.set_page_load_timeout(page_load_timeout)
+            # self.driver.implicitly_wait(implicit_wait_timeout)
+            # self.driver.set_script_timeout(script_timeout)
                 
             logger.info(f"浏览器驱动设置成功: {self.browser}, 设备类型: {device_type}, 语言: {self.language}")
             
@@ -425,8 +439,17 @@ class ScreenshotCapture:
         
         # 没有XPath，执行正常的页面截图
         try:
+            # 确保设备类型不为空，默认为desktop
+            device = device or 'desktop'
+            
+            # 获取设备尺寸
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size, device_type=device)
+            
+            # 判断设备类型是否为移动设备
+            mobile_devices = ['mobile', 'iphone', 'android']
+            device_type = 'mobile' if device in mobile_devices else 'desktop'
+            
+            self._setup_driver(device_size, device_type=device_type)
             
             # 访问页面
             logger.info(f"正在访问页面: {base_url}")
@@ -548,8 +571,17 @@ class ScreenshotCapture:
         
         # 没有XPath，执行正常的CSS选择器截图
         try:
+            # 确保设备类型不为空，默认为desktop
+            device = device or 'desktop'
+            
+            # 获取设备尺寸
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size, device_type=device)
+            
+            # 判断设备类型是否为移动设备
+            mobile_devices = ['mobile', 'iphone', 'android']
+            device_type = 'mobile' if device in mobile_devices else 'desktop'
+            
+            self._setup_driver(device_size, device_type=device_type)
             
             # 访问页面
             self.driver.get(base_url)
@@ -601,8 +633,17 @@ class ScreenshotCapture:
             保存的文件路径
         """
         try:
+            # 确保设备类型不为空，默认为desktop
+            device = device or 'desktop'
+            
+            # 获取设备尺寸
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size, device_type=device)
+            
+            # 判断设备类型是否为移动设备
+            mobile_devices = ['mobile', 'iphone', 'android']
+            device_type = 'mobile' if device in mobile_devices else 'desktop'
+            
+            self._setup_driver(device_size, device_type=device_type)
             
             # 访问页面
             logger.info(f"正在访问页面: {url}")
@@ -611,8 +652,8 @@ class ScreenshotCapture:
             # 设置语言
             self._set_language()
             
-            # 为移动端设置localStorage
-            if device == 'mobile':
+            # 为移动端设备设置localStorage
+            if device in mobile_devices:
                 logger.info("设置移动端localStorage...")
                 # 设置 h5_kalodata_first_open
                 self.driver.execute_script("localStorage.setItem('h5_kalodata_first_open', 'true');")
@@ -644,10 +685,72 @@ class ScreenshotCapture:
             
             logger.info(f"正在查找XPath元素: {xpath}")
             
-            # 等待元素出现
-            element = WebDriverWait(self.driver, 15).until(
-                EC.presence_of_element_located((By.XPATH, xpath))
-            )
+            # 先检查元素是否存在 - 诊断信息
+            try:
+                elements = self.driver.find_elements(By.XPATH, xpath)
+                logger.info(f"🔍 XPath诊断 - 找到 {len(elements)} 个匹配元素")
+                
+                if len(elements) == 0:
+                    # 尝试更通用的查找，帮助诊断
+                    logger.warning(f"❌ XPath元素不存在: {xpath}")
+                    
+                    # 提供一些诊断信息
+                    page_title = self.driver.title
+                    current_url = self.driver.current_url
+                    logger.info(f"📄 当前页面标题: {page_title}")
+                    logger.info(f"🌐 当前页面URL: {current_url}")
+                    
+                    # 检查页面是否加载完成
+                    ready_state = self.driver.execute_script("return document.readyState")
+                    logger.info(f"📄 页面加载状态: {ready_state}")
+                    
+                    # 尝试查找相近的元素
+                    parent_xpath_parts = xpath.split('/')
+                    if len(parent_xpath_parts) > 3:
+                        # 尝试父级路径
+                        parent_xpath = '/'.join(parent_xpath_parts[:-1])
+                        parent_elements = self.driver.find_elements(By.XPATH, parent_xpath)
+                        logger.info(f"🔍 父级XPath ({parent_xpath}) 找到 {len(parent_elements)} 个元素")
+                        
+                        if len(parent_elements) > 0:
+                            logger.info("💡 建议：目标元素的父级存在，可能需要调整XPath选择器")
+                        
+                    # 检查是否有span元素
+                    span_elements = self.driver.find_elements(By.TAG_NAME, "span")
+                    logger.info(f"🔍 页面上总共有 {len(span_elements)} 个span元素")
+                    
+                    raise Exception("元素未查到请检查后重试")
+                    
+                elif len(elements) == 1:
+                    logger.info("✅ XPath元素唯一匹配，准备截图")
+                    element = elements[0]
+                    
+                    # 检查元素是否可见
+                    is_displayed = element.is_displayed()
+                    is_enabled = element.is_enabled()
+                    element_tag = element.tag_name
+                    element_text = element.text[:50] if element.text else "(无文本)"
+                    
+                    logger.info(f"📊 元素信息 - 标签: {element_tag}, 可见: {is_displayed}, 启用: {is_enabled}")
+                    logger.info(f"📝 元素文本: {element_text}")
+                    
+                    if not is_displayed:
+                        logger.warning("⚠️ 元素存在但不可见，尝试继续截图...")
+                        
+                else:
+                    logger.warning(f"⚠️ 找到多个匹配元素 ({len(elements)} 个)，使用第一个")
+                    element = elements[0]
+                    
+            except Exception as diag_error:
+                logger.error(f"❌ XPath诊断失败: {diag_error}")
+                # 继续执行原来的等待逻辑
+                
+            # 等待元素出现（如果上面的诊断成功找到了元素，这里会很快完成）
+            if 'element' not in locals():
+                logger.info("⏳ 使用WebDriverWait等待元素出现...")
+                element = WebDriverWait(self.driver, 15).until(
+                    EC.presence_of_element_located((By.XPATH, xpath))
+                )
             
             # 滚动到元素位置
             self.driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", element)
@@ -671,7 +774,17 @@ class ScreenshotCapture:
             logger.error(f"XPath元素截图失败: {e}")
             logger.error(f"XPath: {xpath}")
             logger.error(f"URL: {url}")
-            raise
+            
+            # 根据异常类型提供友好的错误提示
+            error_message = str(e)
+            if "no such element" in error_message.lower() or "unable to locate element" in error_message.lower():
+                raise Exception("元素未查到请检查后重试")
+            elif "timeout" in error_message.lower() or "renderer" in error_message.lower():
+                raise Exception("页面加载超时，请检查网络连接后重试")
+            elif "chrome" in error_message.lower() or "driver" in error_message.lower():
+                raise Exception("浏览器启动失败，请稍后重试")
+            else:
+                raise Exception(f"截图失败: 元素未查到请检查后重试")
         finally:
             # 确保清理资源
             self._cleanup_processes()
@@ -867,8 +980,17 @@ class ScreenshotCapture:
             元素信息列表
         """
         try:
+            # 确保设备类型不为空，默认为desktop
+            device = device or 'desktop'
+            
+            # 获取设备尺寸
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size, device_type=device)
+            
+            # 判断设备类型是否为移动设备
+            mobile_devices = ['mobile', 'iphone', 'android']
+            device_type = 'mobile' if device in mobile_devices else 'desktop'
+            
+            self._setup_driver(device_size, device_type=device_type)
             
             # 访问页面
             self.driver.get(url)
@@ -961,8 +1083,17 @@ class ScreenshotCapture:
             保存的文件路径
         """
         try:
+            # 确保设备类型不为空，默认为desktop
+            device = device or 'desktop'
+            
+            # 获取设备尺寸
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            self._setup_driver(device_size, device_type=device)
+            
+            # 判断设备类型是否为移动设备
+            mobile_devices = ['mobile', 'iphone', 'android']
+            device_type = 'mobile' if device in mobile_devices else 'desktop'
+            
+            self._setup_driver(device_size, device_type=device_type)
             
             # 访问页面
             self.driver.get(url)

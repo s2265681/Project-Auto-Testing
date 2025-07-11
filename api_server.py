@@ -12,6 +12,7 @@ from flask_cors import CORS
 
 # 导入项目模块
 from src.workflow.executor import WorkflowExecutor
+from src.chat_assistant.chat_assistant import ChatAssistant
 
 def cleanup_old_reports(reports_dir: str):
     """
@@ -89,7 +90,7 @@ def convert_local_path_to_url(file_path, base_url=None):
     
     Args:
         file_path: 本地文件路径
-        base_url: 基础URL，如果为None则使用request的host
+        base_url: 基础URL，如果为None则动态获取
     
     Returns:
         可访问的图片URL
@@ -104,20 +105,43 @@ def convert_local_path_to_url(file_path, base_url=None):
         # 将Windows路径分隔符转换为URL格式
         url_path = rel_path.replace('\\', '/')
         
-        # 构建完整URL
+        # 动态构建完整URL
         if base_url:
             return f"{base_url.rstrip('/')}/files/{url_path}"
         else:
-            # 使用当前请求的host
+            # 动态获取当前请求的host和scheme
             try:
                 from flask import request
                 return f"{request.scheme}://{request.host}/files/{url_path}"
             except:
-                # 如果无法获取request信息，返回相对路径
-                return f"/files/{url_path}"
+                # 如果无法获取request信息，使用智能fallback
+                fallback_base = _get_smart_base_url()
+                return f"{fallback_base}/files/{url_path}"
     except Exception as e:
         logger.warning(f"路径转换失败: {e}")
         return None
+
+def _get_smart_base_url():
+    """智能获取base URL"""
+    # 优先从环境变量获取
+    env_url = os.getenv('SERVER_BASE_URL')
+    if env_url:
+        return env_url.rstrip('/')
+    
+    # 检查是否在本地开发环境
+    local_indicators = [
+        os.getenv('FLASK_ENV') == 'development',
+        os.getenv('ENVIRONMENT') == 'local', 
+        os.getenv('DEBUG') == 'True',
+        # 检查是否在常见的本地开发路径
+        any(path in os.getcwd().lower() for path in ['desktop', 'documents', 'github', 'workspace', 'dev']),
+    ]
+    
+    if any(local_indicators):
+        return 'http://localhost:5001'
+    
+    # 生产环境默认值
+    return 'http://18.141.179.222:5001'
 
 # 配置日志
 logging.basicConfig(
@@ -138,13 +162,35 @@ except Exception as e:
     logger.error(f"工作流执行器初始化失败: {e}")
     workflow_executor = None
 
+# 初始化聊天助手
+try:
+    chat_assistant = ChatAssistant()
+    logger.info("聊天助手初始化成功")
+except Exception as e:
+    logger.error(f"聊天助手初始化失败: {e}")
+    chat_assistant = None
+
+@app.route('/')
+def index():
+    """首页 - 重定向到聊天界面"""
+    return send_from_directory('static', 'chat.html')
+
+@app.route('/chat')
+def chat_page():
+    """聊天页面"""
+    return send_from_directory('static', 'chat.html')
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """健康检查端点"""
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "service": "飞书自动化测试服务"
+        "service": "飞书自动化测试服务",
+        "components": {
+            "workflow_executor": workflow_executor is not None,
+            "chat_assistant": chat_assistant is not None
+        }
     })
 
 @app.route('/files/<path:filename>')
@@ -759,6 +805,239 @@ def generate_test_cases():
             "error": f"测试用例生成失败: {str(e)}"
         }), 500
 
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    """
+    聊天API端点
+    Chat API endpoint
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "请求体为空或格式不正确"
+            }), 400
+        
+        message = data.get('message')
+        if not message:
+            return jsonify({
+                "success": False,
+                "error": "缺少必需参数: message"
+            }), 400
+        
+        session_id = data.get('session_id')
+        user_id = data.get('user_id')
+        device = data.get('device', 'desktop')  # 获取设备参数，默认为desktop
+        
+        logger.info(f"处理聊天消息: message={message[:50]}..., session_id={session_id}, device={device}")
+        
+        # 检查聊天助手是否初始化
+        if chat_assistant is None:
+            return jsonify({
+                "success": False,
+                "error": "聊天助手未初始化，请检查服务器配置"
+            }), 500
+        
+        # 处理消息，传递设备参数
+        response = chat_assistant.process_message(message, session_id, user_id, device)
+        
+        logger.info(f"聊天消息处理完成: session_id={response.get('session_id')}, success={response.get('success')}")
+        
+        return jsonify({
+            "success": True,
+            "data": response
+        })
+        
+    except Exception as e:
+        logger.error(f"聊天API处理失败: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"聊天处理失败: {str(e)}"
+        }), 500
+
+@app.route('/api/chat/history', methods=['GET'])
+def get_chat_history():
+    """
+    获取聊天历史
+    Get chat history
+    """
+    try:
+        session_id = request.args.get('session_id')
+        if not session_id:
+            return jsonify({
+                "success": False,
+                "error": "缺少必需参数: session_id"
+            }), 400
+        
+        limit = request.args.get('limit', type=int)
+        
+        logger.info(f"获取聊天历史: session_id={session_id}, limit={limit}")
+        
+        if chat_assistant is None:
+            return jsonify({
+                "success": False,
+                "error": "聊天助手未初始化"
+            }), 500
+        
+        history = chat_assistant.get_conversation_history(session_id, limit)
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "session_id": session_id,
+                "messages": history,
+                "total": len(history)
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"获取聊天历史失败: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"获取聊天历史失败: {str(e)}"
+        }), 500
+
+@app.route('/api/chat/clear', methods=['POST'])
+def clear_chat():
+    """
+    清除聊天上下文
+    Clear chat context
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "请求体为空或格式不正确"
+            }), 400
+        
+        session_id = data.get('session_id')
+        if not session_id:
+            return jsonify({
+                "success": False,
+                "error": "缺少必需参数: session_id"
+            }), 400
+        
+        logger.info(f"清除聊天上下文: session_id={session_id}")
+        
+        if chat_assistant is None:
+            return jsonify({
+                "success": False,
+                "error": "聊天助手未初始化"
+            }), 500
+        
+        success = chat_assistant.clear_conversation(session_id)
+        
+        return jsonify({
+            "success": success,
+            "message": "聊天上下文清除成功" if success else "清除失败"
+        })
+        
+    except Exception as e:
+        logger.error(f"清除聊天上下文失败: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"清除聊天上下文失败: {str(e)}"
+        }), 500
+
+@app.route('/api/chat/summary', methods=['GET'])
+def get_chat_summary():
+    """
+    获取聊天摘要
+    Get chat summary
+    """
+    try:
+        session_id = request.args.get('session_id')
+        if not session_id:
+            return jsonify({
+                "success": False,
+                "error": "缺少必需参数: session_id"
+            }), 400
+        
+        logger.info(f"获取聊天摘要: session_id={session_id}")
+        
+        if chat_assistant is None:
+            return jsonify({
+                "success": False,
+                "error": "聊天助手未初始化"
+            }), 500
+        
+        summary = chat_assistant.get_conversation_summary(session_id)
+        
+        return jsonify({
+            "success": True,
+            "data": summary
+        })
+        
+    except Exception as e:
+        logger.error(f"获取聊天摘要失败: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"获取聊天摘要失败: {str(e)}"
+        }), 500
+
+@app.route('/api/chat/examples', methods=['GET'])
+def get_chat_examples():
+    """
+    获取聊天示例
+    Get chat examples
+    """
+    try:
+        if chat_assistant is None:
+            return jsonify({
+                "success": False,
+                "error": "聊天助手未初始化"
+            }), 500
+        
+        examples = chat_assistant.get_intent_examples()
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "examples": examples,
+                "available_commands": chat_assistant.get_available_commands()
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"获取聊天示例失败: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"获取聊天示例失败: {str(e)}"
+        }), 500
+
+@app.route('/api/chat/status', methods=['GET'])
+def get_chat_status():
+    """
+    获取聊天系统状态
+    Get chat system status
+    """
+    try:
+        if chat_assistant is None:
+            return jsonify({
+                "success": False,
+                "error": "聊天助手未初始化"
+            }), 500
+        
+        status = chat_assistant.get_system_status()
+        statistics = chat_assistant.get_conversation_statistics()
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "system_status": status,
+                "statistics": statistics
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"获取聊天状态失败: {e}")
+        return jsonify({
+            "success": False,
+            "error": f"获取聊天状态失败: {str(e)}"
+        }), 500
+
 @app.route('/api/reset-status', methods=['POST'])
 def reset_execution_status():
     """
@@ -853,6 +1132,18 @@ if __name__ == '__main__':
     logger.info("  POST /api/execute-comparison - 执行视觉比较")
     logger.info("  POST /api/generate-test-cases - 生成测试用例")
     logger.info("  POST /api/reset-status - 重置执行状态为'未开始'")
+    logger.info("  POST /api/chat - 聊天助手 (智能问答)")
+    logger.info("  GET  /api/chat/history - 获取聊天历史")
+    logger.info("  POST /api/chat/clear - 清除聊天上下文")
+    logger.info("  GET  /api/chat/summary - 获取聊天摘要")
+    logger.info("  GET  /api/chat/examples - 获取聊天示例")
+    logger.info("  GET  /api/chat/status - 获取聊天系统状态")
+    logger.info("")
+    logger.info("🤖 聊天助手功能:")
+    logger.info("    • 支持自然语言交互")
+    logger.info("    • 自动识别意图并执行相应操作")
+    logger.info("    • 支持: 生成测试用例、视觉对比、完整工作流等")
+    logger.info("    • 维护对话上下文，智能参数提取")
     logger.info("")
     logger.info("💡 现在可以通过URL直接访问生成的对比图片:")
     logger.info(f"   例如: http://{host}:{port}/files/reports/comparison_xxxxx/diff_comparison_xxxxx.png")
