@@ -13,8 +13,10 @@ import imagehash
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 import json
+from datetime import datetime
 
 from ..utils.logger import get_logger
+from ..utils.asset_url_converter import convert_diff_image_path, ensure_file_exists
 
 logger = get_logger(__name__)
 
@@ -590,4 +592,416 @@ class VisualComparator:
         if not recommendations:
             recommendations.append("页面实现与设计稿匹配度较高，无重大问题")
         
-        return recommendations 
+        return recommendations
+    
+    def generate_html_report(self, result: ComparisonResult, output_path: str) -> str:
+        """
+        生成HTML视觉对比报告
+        
+        Args:
+            result: 比对结果
+            output_path: 输出路径
+            
+        Returns:
+            HTML报告路径
+        """
+        try:
+            # 生成HTML内容
+            html_content = self._generate_html_content(result)
+            
+            # 写入文件
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(html_content)
+            
+            logger.info(f"HTML比对报告生成成功: {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"生成HTML报告失败: {e}")
+            raise
+    
+    def _generate_html_content(self, result: ComparisonResult) -> str:
+        """生成HTML内容"""
+        
+        # 转换差异图像路径
+        diff_image_url = convert_diff_image_path(result.diff_image_path) if result.diff_image_path else ""
+        
+        # 生成评级样式
+        rating_class = self._get_rating_class(result.similarity_score)
+        
+        # 生成推荐建议HTML
+        recommendations = self._generate_recommendations(result)
+        recommendations_html = self._generate_recommendations_html(recommendations)
+        
+        # 生成分析详情HTML
+        analysis_html = self._generate_analysis_html(result.analysis)
+        
+        # HTML模板
+        html_template = f"""
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>视觉对比报告</title>
+    <style>
+        {self._get_css_styles()}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>🎨 视觉对比报告</h1>
+            <div class="summary-cards">
+                <div class="card similarity">
+                    <h3>相似度</h3>
+                    <div class="number {rating_class}">{result.similarity_score:.3f}</div>
+                    <div class="rating">{self._get_overall_rating(result.similarity_score)}</div>
+                </div>
+                <div class="card mse">
+                    <h3>均方误差</h3>
+                    <div class="number">{result.mse_score:.2f}</div>
+                </div>
+                <div class="card ssim">
+                    <h3>结构相似性</h3>
+                    <div class="number">{result.ssim_score:.3f}</div>
+                </div>
+                <div class="card differences">
+                    <h3>差异点数</h3>
+                    <div class="number">{result.differences_count}</div>
+                </div>
+            </div>
+        </header>
+        
+        <section class="diff-image-section">
+            <h2>📷 差异对比图</h2>
+            {f'<div class="diff-image-container"><img src="{diff_image_url}" alt="差异对比图" class="diff-image" onclick="showFullscreen(this)"></div>' if diff_image_url and ensure_file_exists(result.diff_image_path) else '<p>差异图像不可用</p>'}
+        </section>
+        
+        <section class="analysis-section">
+            <h2>📊 分析详情</h2>
+            {analysis_html}
+        </section>
+        
+        <section class="recommendations-section">
+            <h2>💡 改进建议</h2>
+            {recommendations_html}
+        </section>
+        
+        <footer class="footer">
+            <p>报告生成时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+        </footer>
+    </div>
+    
+    <script>
+        {self._get_javascript()}
+    </script>
+</body>
+</html>
+"""
+        
+        return html_template
+    
+    def _get_rating_class(self, similarity_score: float) -> str:
+        """获取评级CSS类"""
+        if similarity_score >= 0.9:
+            return "excellent"
+        elif similarity_score >= 0.8:
+            return "good"
+        elif similarity_score >= 0.7:
+            return "fair"
+        elif similarity_score >= 0.6:
+            return "poor"
+        else:
+            return "very-poor"
+    
+    def _generate_recommendations_html(self, recommendations: List[str]) -> str:
+        """生成推荐建议HTML"""
+        if not recommendations:
+            return "<p>无建议</p>"
+        
+        html_parts = ["<ul class='recommendations-list'>"]
+        for recommendation in recommendations:
+            html_parts.append(f"<li>{recommendation}</li>")
+        html_parts.append("</ul>")
+        
+        return "\n".join(html_parts)
+    
+    def _generate_analysis_html(self, analysis: Dict) -> str:
+        """生成分析详情HTML"""
+        if not analysis or "error" in analysis:
+            return "<p>分析数据不可用</p>"
+        
+        html_parts = ["<div class='analysis-grid'>"]
+        
+        # 差异统计
+        html_parts.append(f"""
+        <div class="analysis-item">
+            <h3>差异统计</h3>
+            <div class="stat-grid">
+                <div class="stat">
+                    <label>差异区域数量:</label>
+                    <span>{analysis.get('differences_count', 0)}</span>
+                </div>
+                <div class="stat">
+                    <label>差异面积:</label>
+                    <span>{analysis.get('total_diff_area', 0)} 像素</span>
+                </div>
+                <div class="stat">
+                    <label>差异百分比:</label>
+                    <span>{analysis.get('diff_percentage', 0)}%</span>
+                </div>
+            </div>
+        </div>
+        """)
+        
+        # 图像信息
+        dimensions = analysis.get('image_dimensions', {})
+        html_parts.append(f"""
+        <div class="analysis-item">
+            <h3>图像信息</h3>
+            <div class="stat-grid">
+                <div class="stat">
+                    <label>宽度:</label>
+                    <span>{dimensions.get('width', 0)} px</span>
+                </div>
+                <div class="stat">
+                    <label>高度:</label>
+                    <span>{dimensions.get('height', 0)} px</span>
+                </div>
+            </div>
+        </div>
+        """)
+        
+        # 颜色分析
+        color_analysis = analysis.get('color_analysis', {})
+        if color_analysis and "error" not in color_analysis:
+            max_color_diff = color_analysis.get('max_color_diff', 0)
+            html_parts.append(f"""
+            <div class="analysis-item">
+                <h3>颜色分析</h3>
+                <div class="stat-grid">
+                    <div class="stat">
+                        <label>最大颜色差异:</label>
+                        <span>{max_color_diff:.2f}</span>
+                    </div>
+                </div>
+            </div>
+            """)
+        
+        html_parts.append("</div>")
+        
+        return "\n".join(html_parts)
+    
+    def _get_css_styles(self) -> str:
+        """获取CSS样式"""
+        return """
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #2c3e50;
+        }
+        
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        
+        .card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #ddd;
+        }
+        
+        .card.similarity { border-left-color: #3498db; }
+        .card.mse { border-left-color: #e74c3c; }
+        .card.ssim { border-left-color: #27ae60; }
+        .card.differences { border-left-color: #f39c12; }
+        
+        .card h3 {
+            margin-bottom: 10px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .card .number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        
+        .card .number.excellent { color: #27ae60; }
+        .card .number.good { color: #2ecc71; }
+        .card .number.fair { color: #f39c12; }
+        .card .number.poor { color: #e67e22; }
+        .card .number.very-poor { color: #e74c3c; }
+        
+        .card .rating {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        
+        .diff-image-section,
+        .analysis-section,
+        .recommendations-section {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .diff-image-container {
+            text-align: center;
+        }
+        
+        .diff-image {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .analysis-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+        }
+        
+        .analysis-item h3 {
+            margin-bottom: 15px;
+            color: #2c3e50;
+        }
+        
+        .stat-grid {
+            display: grid;
+            gap: 10px;
+        }
+        
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .stat label {
+            font-weight: bold;
+            color: #666;
+        }
+        
+        .stat span {
+            color: #2c3e50;
+        }
+        
+        .recommendations-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .recommendations-list li {
+            background: #f8f9fa;
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            border-left: 4px solid #3498db;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        h2 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        
+        /* 全屏显示样式 */
+        .fullscreen-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            cursor: pointer;
+        }
+        
+        .fullscreen-modal img {
+            max-width: 90%;
+            max-height: 90%;
+            border-radius: 8px;
+        }
+        """
+    
+    def _get_javascript(self) -> str:
+        """获取JavaScript代码"""
+        return """
+        function showFullscreen(img) {
+            const modal = document.createElement('div');
+            modal.className = 'fullscreen-modal';
+            
+            const modalImg = document.createElement('img');
+            modalImg.src = img.src;
+            modalImg.alt = img.alt;
+            
+            modal.appendChild(modalImg);
+            document.body.appendChild(modal);
+            
+            modal.onclick = () => document.body.removeChild(modal);
+            
+            // ESC键关闭
+            const handleEsc = (e) => {
+                if (e.key === 'Escape' && document.body.contains(modal)) {
+                    document.body.removeChild(modal);
+                    document.removeEventListener('keydown', handleEsc);
+                }
+            };
+            document.addEventListener('keydown', handleEsc);
+        }
+        """ 

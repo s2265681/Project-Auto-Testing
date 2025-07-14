@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..utils.logger import get_logger
+from ..utils.asset_url_converter import convert_to_web_url, convert_screenshot_path, ensure_file_exists
 from .types import TestReport, TestResult, StepResult, AssertionResult
 
 logger = get_logger(__name__)
@@ -28,31 +29,7 @@ class ReportGenerator:
         os.makedirs(self.reports_dir, exist_ok=True)
         os.makedirs(self.screenshots_dir, exist_ok=True)
     
-    def _convert_to_web_url(self, file_path: str) -> str:
-        """
-        将本地文件路径转换为web可访问的URL
-        
-        Args:
-            file_path: 本地文件路径
-            
-        Returns:
-            web可访问的URL路径
-        """
-        if not file_path:
-            return ""
-        
-        # 确保使用正斜杠
-        web_path = file_path.replace('\\', '/')
-        
-        # 如果路径不以/files/开头，添加前缀
-        if not web_path.startswith('/files/'):
-            if web_path.startswith('./'):
-                web_path = web_path[2:]
-            elif web_path.startswith('/'):
-                web_path = web_path[1:]
-            web_path = f"/files/{web_path}"
-        
-        return web_path
+
     
     def _cleanup_old_reports(self):
         """清理旧的测试报告和截图文件夹，保留最新的一个"""
@@ -291,7 +268,7 @@ class ReportGenerator:
                     {f'<p><strong>选择器:</strong> <code>{step.step.selector}</code></p>' if step.step.selector else ''}
                     {f'<p><strong>值:</strong> <code>{step.step.value}</code></p>' if step.step.value else ''}
                     {f'<p class="error"><strong>错误:</strong> {step.error}</p>' if step.error else ''}
-                    {f'<p><strong>截图:</strong> <img src="{self._convert_to_web_url(step.screenshot)}" alt="步骤截图" class="step-screenshot"></p>' if step.screenshot else ''}
+                    {f'<p><strong>截图:</strong> <img src="{convert_screenshot_path(step.screenshot)}" alt="步骤截图" class="step-screenshot"></p>' if step.screenshot else ''}
                 </div>
             </div>
             """
@@ -357,8 +334,8 @@ class ReportGenerator:
         html_parts = ["<section class='screenshots'>", "<h2>📸 测试截图</h2>", "<div class='screenshot-grid'>"]
         
         for i, screenshot in enumerate(all_screenshots, 1):
-            if screenshot and os.path.exists(screenshot):
-                screenshot_url = self._convert_to_web_url(screenshot)
+            if screenshot and ensure_file_exists(screenshot):
+                screenshot_url = convert_screenshot_path(screenshot)
                 html_parts.append(f"""
                 <div class="screenshot-item">
                     <img src="{screenshot_url}" alt="测试截图 {i}" onclick="showFullscreen(this)">
