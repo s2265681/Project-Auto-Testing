@@ -414,9 +414,12 @@ class ScreenshotCapture:
     
     def capture_url(self, url: str, output_path: str, 
                    device: str = 'desktop', wait_time: int = 3,
-                   full_page: bool = True) -> str:
+                   full_page: bool = True,
+                   cookies: dict = None,
+                   local_storage: dict = None,
+                   browser_language: str = None) -> str:
         """
-        截取网页（支持URL:XPath格式自动检测）
+        截取网页（支持URL:XPath格式自动检测），支持自定义Cookie、localStorage、浏览器语言
         
         Args:
             url: 网页URL，支持格式：
@@ -426,7 +429,9 @@ class ScreenshotCapture:
             device: 设备类型
             wait_time: 页面加载等待时间（秒）
             full_page: 是否截取完整页面（仅当没有XPath时有效）
-            
+            cookies: dict, 访问前设置的cookie
+            local_storage: dict, 访问后设置的localStorage
+            browser_language: str, 浏览器语言（覆盖self.language）
         Returns:
             保存的文件路径
         """
@@ -438,58 +443,75 @@ class ScreenshotCapture:
             logger.info("检测到XPath格式，将截取特定元素")
             return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time)
         
-        # 没有XPath，执行正常的页面截图
         try:
-            # 确保设备类型不为空，默认为desktop
             device = device or 'desktop'
-            
-            # 获取设备尺寸
             device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
-            
-            # 判断设备类型是否为移动设备
             mobile_devices = ['mobile', 'iphone', 'android']
             device_type = 'mobile' if device in mobile_devices else 'desktop'
-            
+
+            # 优先使用 browser_language
+            if browser_language:
+                old_language = self.language
+                self.language = browser_language
+            else:
+                old_language = None
+
             self._setup_driver(device_size, device_type=device_type)
-            
-            # 访问页面
+
+            # 访问一次页面以获得 domain
             logger.info(f"正在访问页面: {base_url}")
             self.driver.get(base_url)
-            
+            time.sleep(1)
+
+            # 设置 Cookie
+            if cookies:
+                logger.info(f"设置Cookie: {cookies}")
+                domain = self.driver.execute_script("return document.domain;")
+                for name, value in cookies.items():
+                    try:
+                        self.driver.add_cookie({'name': name, 'value': value, 'domain': domain})
+                    except Exception as e:
+                        logger.warning(f"设置Cookie失败: {name}={value}, 错误: {e}")
+                # 刷新页面以使Cookie生效
+                self.driver.refresh()
+                time.sleep(1)
+
+            # 设置 localStorage
+            if local_storage:
+                logger.info(f"设置localStorage: {local_storage}")
+                for key, value in local_storage.items():
+                    self.driver.execute_script(f"window.localStorage.setItem('{key}', '{value}');")
+                # 刷新页面以使localStorage生效
+                self.driver.refresh()
+                time.sleep(1)
+
             # 设置语言
             self._set_language()
-            
+
             # 等待页面加载
-            time.sleep(min(wait_time, 5))  # 限制最大等待时间
-            
-            # 等待页面完全加载（带超时控制）
+            time.sleep(min(wait_time, 5))
             self._wait_for_page_fully_loaded(max_wait_time=20)
-            
-            # 确保输出目录存在
+
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            
+
             if full_page:
-                # 获取页面完整高度
                 total_height = self.driver.execute_script("return document.body.scrollHeight")
                 viewport_height = self.driver.execute_script("return window.innerHeight")
-                
-                # 如果页面高度超过视口，进行滚动截图
                 if total_height > viewport_height:
                     self._capture_full_page(output_path, total_height, viewport_height)
                 else:
                     self.driver.save_screenshot(output_path)
             else:
-                # 只截取当前视口
                 self.driver.save_screenshot(output_path)
-            
+
             logger.info(f"截图保存成功: {output_path}")
             return output_path
-            
         except Exception as e:
             logger.error(f"截图失败: {e}")
             raise
         finally:
-            # 确保清理资源
+            if old_language:
+                self.language = old_language
             self._cleanup_processes()
     
     def _capture_full_page(self, output_path: str, total_height: int, viewport_height: int):
@@ -546,7 +568,10 @@ class ScreenshotCapture:
                     pass
     
     def capture_element(self, url: str, selector: str, output_path: str,
-                       device: str = 'desktop', wait_time: int = 3) -> str:
+                       device: str = 'desktop', wait_time: int = 3,
+                       cookies: dict = None,
+                       local_storage: dict = None,
+                       browser_language: str = None) -> str:
         """
         截取页面特定元素（支持URL:XPath格式自动检测）
         
@@ -558,6 +583,9 @@ class ScreenshotCapture:
             output_path: 输出文件路径
             device: 设备类型
             wait_time: 等待时间
+            cookies: 要注入的cookies字典
+            local_storage: 要注入的localStorage字典
+            browser_language: 浏览器语言设置
             
         Returns:
             保存的文件路径
@@ -568,7 +596,8 @@ class ScreenshotCapture:
         if xpath:
             # 如果检测到XPath，忽略selector参数，使用XPath方法
             logger.info("检测到XPath格式，将使用XPath而不是CSS选择器")
-            return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time)
+            return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time,
+                                               cookies, local_storage, browser_language)
         
         # 没有XPath，执行正常的CSS选择器截图
         try:
@@ -586,6 +615,29 @@ class ScreenshotCapture:
             
             # 访问页面
             self.driver.get(base_url)
+            
+            # 注入 cookies
+            if cookies:
+                logger.info(f"注入 {len(cookies)} 个 cookies")
+                for name, value in cookies.items():
+                    self.driver.add_cookie({"name": name, "value": value})
+            
+            # 在页面加载后注入 localStorage
+            if local_storage:
+                logger.info(f"注入 {len(local_storage)} 个 localStorage 项")
+                for key, value in local_storage.items():
+                    self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+            
+            # 设置浏览器语言
+            if browser_language:
+                logger.info(f"设置浏览器语言: {browser_language}")
+                self.driver.execute_script(f"localStorage.setItem('language', '{browser_language}');")
+            
+            # 如果有注入设置，刷新页面
+            if cookies or local_storage or browser_language:
+                logger.info("刷新页面以应用注入的设置...")
+                self.driver.refresh()
+                time.sleep(2)
             
             # 设置语言
             self._set_language()
@@ -619,7 +671,10 @@ class ScreenshotCapture:
             self._cleanup_processes()
 
     def capture_element_by_xpath(self, url: str, xpath: str, output_path: str,
-                                device: str = 'desktop', wait_time: int = 3) -> str:
+                                device: str = 'desktop', wait_time: int = 3,
+                                cookies: dict = None,
+                                local_storage: dict = None,
+                                browser_language: str = None) -> str:
         """
         通过XPath截取页面特定元素
         
@@ -629,6 +684,9 @@ class ScreenshotCapture:
             output_path: 输出文件路径
             device: 设备类型
             wait_time: 等待时间
+            cookies: 要注入的cookies字典
+            local_storage: 要注入的localStorage字典
+            browser_language: 浏览器语言设置
             
         Returns:
             保存的文件路径
@@ -653,6 +711,39 @@ class ScreenshotCapture:
             # 访问页面
             logger.info(f"正在访问页面: {url}")
             self.driver.get(url)
+            
+            # 注入 cookies
+            if cookies:
+                # 支持字符串自动解析
+                if isinstance(cookies, str):
+                    cookies_list = self._parse_cookie_string(cookies)
+                    logger.info(f"注入 {len(cookies_list)} 个 cookies (字符串模式)")
+                    for cookie in cookies_list:
+                        try:
+                            self.driver.add_cookie(cookie)
+                        except Exception as e:
+                            logger.warning(f"注入 cookie 失败: {cookie['name']} - {e}")
+                else:
+                    logger.info(f"注入 {len(cookies)} 个 cookies")
+                    for name, value in cookies.items():
+                        self.driver.add_cookie({"name": name, "value": value})
+            
+            # 在页面加载后注入 localStorage
+            if local_storage:
+                logger.info(f"注入 {len(local_storage)} 个 localStorage 项")
+                for key, value in local_storage.items():
+                    self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+            
+            # 设置浏览器语言
+            if browser_language:
+                logger.info(f"设置浏览器语言: {browser_language}")
+                self.driver.execute_script(f"localStorage.setItem('language', '{browser_language}');")
+            
+            # 如果有注入设置，刷新页面
+            if cookies or local_storage or browser_language:
+                logger.info("刷新页面以应用注入的设置...")
+                self.driver.refresh()
+                time.sleep(2)
             
             # 设置语言
             self._set_language()
@@ -795,7 +886,10 @@ class ScreenshotCapture:
             self._cleanup_processes()
 
     def capture_by_xpath(self, url: str, xpath: str = None, output_dir: str = '',
-                        device: str = 'desktop', wait_time: int = 3) -> str:
+                        device: str = 'desktop', wait_time: int = 3,
+                        cookies: dict = None,
+                        local_storage: dict = None,
+                        browser_language: str = None) -> str:
         """
         通过XPath截取元素的便捷方法（支持URL:XPath格式）
         
@@ -807,6 +901,9 @@ class ScreenshotCapture:
             output_dir: 输出目录
             device: 设备类型
             wait_time: 等待时间
+            cookies: 要注入的cookies字典
+            local_storage: 要注入的localStorage字典
+            browser_language: 浏览器语言设置
             
         Returns:
             保存的文件路径
@@ -824,7 +921,8 @@ class ScreenshotCapture:
         filename = self.build_filename_from_xpath(final_xpath, device, base_url)
         output_path = os.path.join(output_dir, filename)
         
-        return self.capture_element_by_xpath(base_url, final_xpath, output_path, device, wait_time)
+        return self.capture_element_by_xpath(base_url, final_xpath, output_path, device, wait_time,
+                                           cookies, local_storage, browser_language)
     
     def build_filename_from_xpath(self, xpath: str, device: str, url: str) -> str:
         """
@@ -940,6 +1038,16 @@ class ScreenshotCapture:
                 self.driver.quit()
                 self.driver = None 
     
+    @staticmethod
+    def _parse_cookie_string(cookie_str: str):
+        """将cookie字符串解析为Selenium可用的cookie字典列表"""
+        cookies = []
+        for item in cookie_str.split(';'):
+            if '=' in item:
+                k, v = item.strip().split('=', 1)
+                cookies.append({"name": k, "value": v})
+        return cookies
+
     @staticmethod
     def build_class_selector(classes: str) -> str:
         """

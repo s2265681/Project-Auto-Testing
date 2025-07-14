@@ -156,7 +156,18 @@ const ChatInput: React.FC<ChatInputProps> = ({
         </div>
         
         <div className="text-xs text-gray-500">
-          💡 视觉对比时将使用所选设备进行测试（任务可能需要1-5分钟）
+          💡 视觉对比时将使用所选设备进行测试（任务可能需要1-5分钟）<br/>
+          <span className="block mt-1">
+            <b>如需测试登录态请设置 cookie：</b><br/>
+            <code>"SESSION": "OGZmYmU1MGEtZDc3ZC00ZGJkLWI5N2YtODE5MTgzMjAzMmRi", "deviceId": "4b609475-5a78-479b-8315-7e9df9cec2cd", ...&#125;</code>
+          </span>
+          <span className="block mt-1">
+            <b>如需设置页面状态请设置 localStorage：</b><br/>
+            <code>localStorage: &#123;<br/>
+            &nbsp;&nbsp;PHONE:86:15605889409|GlobalNotify-266: "true", // 关闭首次登录出现的弹窗<br/>
+            &nbsp;&nbsp;language: "es-ES" // 西班牙语<br/>
+            &#125;</code>
+          </span>
         </div>
       </div>
 

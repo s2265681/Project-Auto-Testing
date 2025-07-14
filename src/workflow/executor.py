@@ -227,7 +227,10 @@ class WorkflowExecutor:
                            xpath_selector: str = None,  # 改为XPath选择器
                            device: str = "desktop",
                            output_dir: str = "reports",
-                           test_type: str = "完整测试") -> Dict[str, Any]:
+                           test_type: str = "完整测试",
+                           cookies: dict = None,
+                           local_storage: dict = None,
+                           browser_language: str = None) -> Dict[str, Any]:
         """
         执行飞书多维表格按钮点击的工作流
         Execute workflow for Feishu multidimensional table button click
@@ -279,7 +282,8 @@ class WorkflowExecutor:
                 # 只执行Figma与网站的视觉比较
                 logger.info("执行UI测试: 比较Figma设计和网站")
                 comparison_result = self._compare_figma_and_website(
-                    figma_url, website_url, xpath_selector, device, output_dir
+                    figma_url, website_url, xpath_selector, device, output_dir,
+                    cookies, local_storage, browser_language
                 )
                 result["comparison_result"] = comparison_result
                 logger.info("UI测试完成，跳过PRD解析")
@@ -296,7 +300,8 @@ class WorkflowExecutor:
                 # 步骤2: 比较Figma设计和网站
                 logger.info("步骤2: 比较Figma设计和网站")
                 comparison_result = self._compare_figma_and_website(
-                    figma_url, website_url, xpath_selector, device, output_dir
+                    figma_url, website_url, xpath_selector, device, output_dir,
+                    cookies, local_storage, browser_language
                 )
                 result["comparison_result"] = comparison_result
             
@@ -410,7 +415,10 @@ class WorkflowExecutor:
                                  website_url: str, 
                                  xpath_selector: str = None,  # 改为XPath选择器
                                  device: str = "desktop",
-                                 output_dir: str = "reports") -> Dict[str, Any]:
+                                 output_dir: str = "reports",
+                                 cookies: dict = None,
+                                 local_storage: dict = None,
+                                 browser_language: str = None) -> Dict[str, Any]:
         """
         比较Figma设计和网站
         Compare Figma design and website
@@ -439,7 +447,10 @@ class WorkflowExecutor:
                     xpath=xpath_selector,
                     output_dir=current_output_dir,
                     device=device,
-                    wait_time=5  # 减少等待时间以提高效率
+                    wait_time=5,  # 减少等待时间以提高效率
+                    cookies=cookies,
+                    local_storage=local_storage,
+                    browser_language=browser_language
                 )
                 # 重命名文件为标准格式
                 xpath_filename = self.screenshot_capture.build_filename_from_xpath(
