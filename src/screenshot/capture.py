@@ -391,7 +391,10 @@ class ScreenshotCapture:
 
     def capture_url_with_auto_detection(self, url_input: str, output_path: str, 
                                        device: str = 'desktop', wait_time: int = 3,
-                                       full_page: bool = True) -> str:
+                                       full_page: bool = True,
+                                       cookies: dict = None,
+                                       local_storage: dict = None,
+                                       browser_language: str = None) -> str:
         """
         智能截图方法，自动检测URL中是否包含XPath
         
@@ -410,11 +413,13 @@ class ScreenshotCapture:
         if xpath:
             # 如果检测到XPath，截取特定元素
             logger.info("检测到XPath，将截取特定元素")
-            return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time)
+            return self.capture_element_by_xpath(base_url, xpath, output_path, device, wait_time,
+                                               cookies, local_storage, browser_language)
         else:
             # 如果没有XPath，正常截取页面
             logger.info("未检测到XPath，将截取整个页面")
-            return self.capture_url(base_url, output_path, device, wait_time, full_page)
+            return self.capture_url(base_url, output_path, device, wait_time, full_page,
+                                  cookies, local_storage, browser_language)
     
     def capture_url(self, url: str, output_path: str, 
                    device: str = 'desktop', wait_time: int = 3,
@@ -475,13 +480,9 @@ class ScreenshotCapture:
                 time.sleep(1)
 
             # 设置 localStorage
-            if local_storage:
-                logger.info(f"设置localStorage: {local_storage}")
-                for key, value in local_storage.items():
-                    self.driver.execute_script(f"window.localStorage.setItem('{key}', '{value}');")
-                # 刷新页面以使localStorage生效
-                self.driver.refresh()
-                time.sleep(1)
+            if self.driver:
+                mobile_devices = ['mobile', 'iphone', 'android']
+                self._set_enhanced_local_storage(local_storage, device, mobile_devices)
 
             # 设置语言
             self._set_language()
@@ -620,19 +621,23 @@ class ScreenshotCapture:
                 current_domain = self.driver.execute_script("return document.domain;")
                 self._set_enhanced_cookies(cookies, current_domain)
             
-            # 在页面加载后注入 localStorage
-            if local_storage:
-                logger.info(f"注入 {len(local_storage)} 个 localStorage 项")
-                for key, value in local_storage.items():
-                    self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+            # 设置localStorage
+            mobile_devices = ['mobile', 'iphone', 'android']
             
-            # 设置浏览器语言
+            # 合并browser_language到local_storage
+            final_local_storage = {}
+            if local_storage:
+                final_local_storage.update(local_storage)
             if browser_language:
                 logger.info(f"设置浏览器语言: {browser_language}")
-                self.driver.execute_script(f"localStorage.setItem('language', '{browser_language}');")
+                final_local_storage['language'] = browser_language
+            
+            # 使用增强的localStorage设置方法
+            if final_local_storage:
+                self._set_enhanced_local_storage(final_local_storage, device, mobile_devices)
             
             # 如果有注入设置，刷新页面
-            if cookies or local_storage or browser_language:
+            if cookies and not final_local_storage:  # localStorage已经在_set_enhanced_local_storage中处理了刷新
                 # 在刷新前记录SESSION cookie值
                 original_session_cookie = None
                 if cookies:
@@ -753,24 +758,22 @@ class ScreenshotCapture:
             elif not self.driver:
                 logger.error("Driver未初始化，无法注入cookies")
             
-            # 在页面加载后注入 localStorage
-            if local_storage and self.driver:
-                # 处理localStorage参数，支持字符串和字典两种格式
+            # 设置localStorage（支持字符串和字典格式）
+            mobile_devices = ['mobile', 'iphone', 'android']
+            
+            # 处理localStorage参数，支持字符串和字典格式
+            final_local_storage = {}
+            if local_storage:
                 if isinstance(local_storage, str):
                     try:
                         # 尝试解析JSON格式的localStorage字符串
                         import json
                         local_storage_dict = json.loads(local_storage)
-                        logger.info(f"注入 {len(local_storage_dict)} 个 localStorage 项 (JSON字符串模式)")
-                        for key, value in local_storage_dict.items():
-                            if self.driver:  # 检查driver状态
-                                self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
-                            else:
-                                logger.error("Driver已失效，停止localStorage注入")
-                                break
+                        final_local_storage.update(local_storage_dict)
+                        logger.info(f"解析JSON格式localStorage: {len(local_storage_dict)} 个项目")
                     except (json.JSONDecodeError, ValueError):
                         # 如果JSON解析失败，尝试解析简单的键值对格式
-                        logger.info(f"注入 localStorage 项 (简单字符串模式)")
+                        logger.info(f"解析简单格式localStorage")
                         # 移除大括号
                         local_storage_str = local_storage.strip()
                         if local_storage_str.startswith('{') and local_storage_str.endswith('}'):
@@ -785,30 +788,23 @@ class ScreenshotCapture:
                                 value = value.strip().strip('"\'')
                                 # 处理转义的引号
                                 value = value.replace('\\"', '"')
-                                if self.driver:  # 检查driver状态
-                                    self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
-                                else:
-                                    logger.error("Driver已失效，停止localStorage注入")
-                                    break
+                                final_local_storage[key] = value
                 else:
                     # 字典格式
-                    logger.info(f"注入 {len(local_storage)} 个 localStorage 项 (字典模式)")
-                    for key, value in local_storage.items():
-                        if self.driver:  # 检查driver状态
-                            self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
-                        else:
-                            logger.error("Driver已失效，停止localStorage注入")
-                            break
-            elif not self.driver:
-                logger.error("Driver未初始化，无法注入localStorage")
+                    final_local_storage.update(local_storage)
+                    logger.info(f"使用字典格式localStorage: {len(local_storage)} 个项目")
             
-            # 设置浏览器语言
-            if browser_language and self.driver:
+            # 添加浏览器语言设置
+            if browser_language:
                 logger.info(f"设置浏览器语言: {browser_language}")
-                self.driver.execute_script(f"localStorage.setItem('language', '{browser_language}');")
+                final_local_storage['language'] = browser_language
+            
+            # 使用增强的localStorage设置方法
+            if final_local_storage:
+                self._set_enhanced_local_storage(final_local_storage, device, mobile_devices)
             
             # 如果有注入设置，刷新页面
-            if (cookies or local_storage or browser_language) and self.driver:
+            if cookies and not final_local_storage and self.driver:  # localStorage已经在_set_enhanced_local_storage中处理了刷新
                 # 在刷新前记录SESSION cookie值
                 original_session_cookie = None
                 if cookies:
@@ -848,26 +844,9 @@ class ScreenshotCapture:
             if self.driver:
                 self._set_language()
             
-            # 为移动端设备设置localStorage
-            if device in mobile_devices and self.driver:
-                logger.info("设置移动端localStorage...")
-                # 设置 h5_kalodata_first_open
-                self.driver.execute_script("localStorage.setItem('h5_kalodata_first_open', 'true');")
-                # 设置 h5_kalodata_last_visit 为当前时间戳
-                self.driver.execute_script("localStorage.setItem('h5_kalodata_last_visit', Date.now().toString());")
-                # 设置 h5_language 为 en-US
-                self.driver.execute_script("localStorage.setItem('h5_language', 'en-US');")
-                # 设置弹窗控制相关项目
-                self.driver.execute_script("localStorage.setItem('h5_kalodata_modal_state', 'hidden');")
-                self.driver.execute_script("localStorage.setItem('h5_app_guide_shown', 'true');")
-                self.driver.execute_script("localStorage.setItem('h5_download_guide_dismissed', 'true');")
-                logger.info("移动端localStorage设置完成")
-                
-                # 等待1秒后刷新页面
-                logger.info("等待1秒后刷新页面以应用localStorage设置...")
-                time.sleep(1)
-                self.driver.refresh()
-                self._set_language()
+            # 设置localStorage
+            if self.driver:
+                self._set_enhanced_local_storage(local_storage, device, mobile_devices)
             
             time.sleep(wait_time)
             
@@ -1388,7 +1367,10 @@ class ScreenshotCapture:
                 self.driver = None 
 
     def capture_full_page(self, url: str, output_path: str, 
-                         device: str = 'desktop', wait_time: int = 3) -> str:
+                         device: str = 'desktop', wait_time: int = 3,
+                         cookies: dict = None,
+                         local_storage: dict = None,
+                         browser_language: str = None) -> str:
         """
         截取完整页面
         Capture full page screenshot
@@ -1398,11 +1380,16 @@ class ScreenshotCapture:
             output_path: 输出文件路径 output file path
             device: 设备类型 device type
             wait_time: 等待时间 wait time
+            cookies: 要注入的cookies字典
+            local_storage: 要注入的localStorage字典
+            browser_language: 浏览器语言设置
             
         Returns:
             保存的文件路径 saved file path
         """
-        return self.capture_url(url, output_path, device, wait_time, full_page=True)
+        return self.capture_url(url, output_path, device, wait_time, full_page=True,
+                              cookies=cookies, local_storage=local_storage, 
+                              browser_language=browser_language)
     
     def build_filename_from_classes(self, classes: str, element_index: int, 
                                    device: str, url: str) -> str:
@@ -1859,4 +1846,153 @@ class ScreenshotCapture:
             logger.info("=== 验证完成 ===")
             
         except Exception as e:
-            logger.error(f"验证cookies时出错: {e}") 
+            logger.error(f"验证cookies时出错: {e}")
+    
+    def _set_enhanced_local_storage(self, local_storage: dict, device: str, mobile_devices: list):
+        """增强的localStorage设置方法，支持传入参数和移动端默认设置"""
+        if not self.driver:
+            return
+        
+        # 移动端默认localStorage设置
+        mobile_default_storage = {
+            'h5_kalodata_first_open': 'true',
+            'h5_kalodata_last_visit': None,  # 特殊处理，设置为当前时间戳
+            'h5_language': 'en-US',
+            'h5_kalodata_modal_state': 'hidden',
+            'h5_app_guide_shown': 'true',
+            'h5_download_guide_dismissed': 'true'
+        }
+        
+        # 合并localStorage设置
+        final_storage = {}
+        
+        # 如果是移动端设备，先添加默认设置
+        if device in mobile_devices:
+            logger.info(f"为移动端设备({device})设置默认localStorage...")
+            final_storage.update(mobile_default_storage)
+        
+        # 添加用户传入的localStorage设置，会覆盖默认设置
+        if local_storage:
+            logger.info(f"应用用户传入的localStorage设置，数据类型: {type(local_storage)}")
+            
+            # 如果数据类型是字典，显示长度；如果是其他类型，显示详细信息
+            if isinstance(local_storage, dict):
+                logger.info(f"localStorage字典包含 {len(local_storage)} 个项目")
+            else:
+                logger.info(f"localStorage数据内容: {str(local_storage)[:200]}...")
+            
+            # 验证和格式化localStorage数据
+            validated_storage = self._validate_and_format_local_storage(local_storage)
+            if validated_storage:
+                final_storage.update(validated_storage)
+            else:
+                logger.warning("localStorage数据格式无效，跳过用户设置")
+        
+        # 如果没有任何localStorage设置，直接返回
+        if not final_storage:
+            logger.info("没有localStorage设置需要应用")
+            return
+        
+        # 应用localStorage设置
+        logger.info(f"开始设置localStorage: {len(final_storage)} 个项目")
+        set_count = 0
+        
+        try:
+            for key, value in final_storage.items():
+                try:
+                    # 特殊处理时间戳
+                    if key == 'h5_kalodata_last_visit' and value is None:
+                        script = f"localStorage.setItem('{key}', Date.now().toString());"
+                        logger.info(f"设置localStorage: {key} = <当前时间戳>")
+                    else:
+                        # 确保值是字符串
+                        value_str = str(value) if value is not None else ''
+                        script = f"localStorage.setItem('{key}', '{value_str}');"
+                        logger.info(f"设置localStorage: {key} = {value_str}")
+                    
+                    self.driver.execute_script(script)
+                    set_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"设置localStorage项目失败: {key} = {value}, 错误: {e}")
+            
+            logger.info(f"localStorage设置完成: 成功设置 {set_count}/{len(final_storage)} 个项目")
+            
+            # 如果有localStorage设置，等待1秒后刷新页面以应用设置
+            if set_count > 0:
+                logger.info("等待1秒后刷新页面以应用localStorage设置...")
+                time.sleep(1)
+                self.driver.refresh()
+                self._set_language()
+                
+        except Exception as e:
+            logger.error(f"设置localStorage时出错: {e}")
+    
+    def _validate_and_format_local_storage(self, local_storage):
+        """验证和格式化localStorage数据"""
+        try:
+            logger.info(f"开始验证localStorage数据，类型: {type(local_storage)}")
+            
+            # 如果是字符串，尝试解析为JSON
+            if isinstance(local_storage, str):
+                try:
+                    import json
+                    local_storage = json.loads(local_storage)
+                    logger.info("localStorage字符串已解析为JSON")
+                except json.JSONDecodeError as e:
+                    logger.error(f"localStorage字符串不是有效的JSON格式: {e}")
+                    logger.error(f"原始数据: {local_storage[:500]}...")
+                    return None
+            
+            # 如果是列表类型，可能是键值对列表
+            if isinstance(local_storage, list):
+                logger.info(f"localStorage是列表类型，包含 {len(local_storage)} 个元素")
+                # 尝试转换为字典
+                dict_storage = {}
+                for i, item in enumerate(local_storage):
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        dict_storage[str(item[0])] = str(item[1])
+                    elif isinstance(item, dict) and len(item) == 1:
+                        key, value = next(iter(item.items()))
+                        dict_storage[str(key)] = str(value)
+                    else:
+                        logger.warning(f"跳过无效的localStorage项目 {i}: {item}")
+                
+                if dict_storage:
+                    logger.info(f"成功将列表转换为字典: {len(dict_storage)} 个项目")
+                    local_storage = dict_storage
+                else:
+                    logger.error("无法将列表转换为有效的字典格式")
+                    return None
+            
+            # 如果不是字典，尝试转换
+            if not isinstance(local_storage, dict):
+                logger.error(f"localStorage必须是字典格式，当前是: {type(local_storage)}")
+                logger.error(f"数据内容: {str(local_storage)[:200]}...")
+                return None
+            
+            # 验证字典结构
+            validated = {}
+            for key, value in local_storage.items():
+                # 确保key是字符串
+                if not isinstance(key, str):
+                    logger.warning(f"localStorage key必须是字符串，跳过: {key} (类型: {type(key)})")
+                    continue
+                
+                # 确保value可以转换为字符串
+                try:
+                    value_str = str(value) if value is not None else ''
+                    validated[key] = value_str
+                except Exception as e:
+                    logger.warning(f"localStorage value无法转换为字符串，跳过: {key} = {value}, 错误: {e}")
+                    continue
+            
+            logger.info(f"localStorage验证完成: {len(validated)}/{len(local_storage)} 个项目通过验证")
+            return validated
+            
+        except Exception as e:
+            logger.error(f"验证localStorage数据时出错: {e}")
+            logger.error(f"原始数据类型: {type(local_storage)}")
+            if hasattr(local_storage, '__len__'):
+                logger.error(f"数据长度: {len(local_storage)}")
+            return None

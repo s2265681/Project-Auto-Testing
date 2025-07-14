@@ -469,7 +469,10 @@ class WorkflowExecutor:
                     url=website_url,
                     output_path=website_screenshot_path,
                     device=device,
-                    wait_time=5  # 减少等待时间以提高效率
+                    wait_time=5,  # 减少等待时间以提高效率
+                    cookies=cookies,
+                    local_storage=local_storage,
+                    browser_language=browser_language
                 )
             
             self._log_resource_usage("网页截图完成")
