@@ -354,3 +354,198 @@ class FigmaClient:
         except Exception as e:
             logger.error(f"设计结构分析失败: {e}")
             raise 
+
+    def capture_node_screenshot(self, file_id: str, node_id: str, 
+                               format: str = "png", scale: float = 2.0,
+                               save_path: str = None) -> str:
+        """
+        通过 Figma API 获取节点截图（比浏览器截图更快）
+        Capture node screenshot via Figma API (faster than browser screenshot)
+        
+        Args:
+            file_id: Figma文件ID
+            node_id: 节点ID
+            format: 图片格式 (png, jpg, svg, pdf)
+            scale: 图片缩放比例 (1.0, 2.0, 3.0, 4.0)
+            save_path: 保存路径，如果为None则自动生成
+            
+        Returns:
+            保存的文件路径
+        """
+        try:
+            logger.info(f"开始通过API获取节点截图: file_id={file_id}, node_id={node_id}")
+            
+            # 导出节点为图片URL
+            image_urls = self.export_images(file_id, [node_id], format, scale)
+            
+            # 添加调试信息
+            logger.info(f"export_images 返回的数据: {image_urls}")
+            logger.info(f"返回数据的类型: {type(image_urls)}")
+            logger.info(f"返回数据的键: {list(image_urls.keys()) if isinstance(image_urls, dict) else 'Not a dict'}")
+            
+            if not image_urls:
+                raise Exception(f"export_images 返回空数据")
+            
+            if not isinstance(image_urls, dict):
+                raise Exception(f"export_images 返回的数据不是字典类型: {type(image_urls)}")
+            
+            # 处理节点ID格式问题：Figma API 返回的键使用冒号分隔，URL中使用连字符
+            # 尝试多种格式匹配
+            possible_keys = [
+                node_id,  # 原始格式
+                node_id.replace('-', ':'),  # 连字符转冒号
+                node_id.replace(':', '-'),  # 冒号转连字符
+            ]
+            
+            image_url = None
+            used_key = None
+            
+            for key in possible_keys:
+                if key in image_urls and image_urls[key]:
+                    image_url = image_urls[key]
+                    used_key = key
+                    logger.info(f"找到匹配的键: {key}")
+                    break
+            
+            if not image_url:
+                logger.warning(f"节点 {node_id} 不在返回的键中，可用的键: {list(image_urls.keys())}")
+                # 尝试使用第一个可用的键
+                if image_urls:
+                    first_key = list(image_urls.keys())[0]
+                    logger.info(f"使用第一个可用的键: {first_key}")
+                    image_url = image_urls[first_key]
+                    used_key = first_key
+                else:
+                    raise Exception(f"无法获取节点 {node_id} 的图片URL，返回的数据为空")
+            
+            logger.info(f"最终使用的键: {used_key}, URL: {image_url}")
+            
+            if not image_url:
+                raise Exception(f"节点 {node_id} 的图片URL为空")
+            
+            # 如果没有指定保存路径，自动生成
+            if not save_path:
+                timestamp = int(time.time())
+                save_path = f"screenshots/figma_node_{node_id}_{timestamp}.{format}"
+            
+            # 下载图片
+            downloaded_path = self.download_image(image_url, save_path)
+            
+            logger.info(f"节点截图获取成功: {downloaded_path}")
+            return downloaded_path
+            
+        except Exception as e:
+            logger.error(f"获取节点截图失败: {e}")
+            raise
+    
+    def capture_multiple_nodes_screenshots(self, file_id: str, node_ids: List[str],
+                                         format: str = "png", scale: float = 2.0,
+                                         output_dir: str = "screenshots") -> Dict[str, str]:
+        """
+        批量获取多个节点的截图
+        Batch capture screenshots for multiple nodes
+        
+        Args:
+            file_id: Figma文件ID
+            node_ids: 节点ID列表
+            format: 图片格式
+            scale: 图片缩放比例
+            output_dir: 输出目录
+            
+        Returns:
+            节点ID到文件路径的映射
+        """
+        try:
+            logger.info(f"开始批量获取节点截图: {len(node_ids)} 个节点")
+            
+            # 确保输出目录存在
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # 导出所有节点为图片URL
+            image_urls = self.export_images(file_id, node_ids, format, scale)
+            
+            results = {}
+            timestamp = int(time.time())
+            
+            for node_id in node_ids:
+                # 处理节点ID格式问题：尝试多种格式匹配
+                possible_keys = [
+                    node_id,  # 原始格式
+                    node_id.replace('-', ':'),  # 连字符转冒号
+                    node_id.replace(':', '-'),  # 冒号转连字符
+                ]
+                
+                image_url = None
+                used_key = None
+                
+                for key in possible_keys:
+                    if key in image_urls and image_urls[key]:
+                        image_url = image_urls[key]
+                        used_key = key
+                        break
+                
+                if image_url:
+                    try:
+                        # 生成保存路径
+                        filename = f"node_{node_id}_{timestamp}.{format}"
+                        save_path = os.path.join(output_dir, filename)
+                        
+                        # 下载图片
+                        downloaded_path = self.download_image(image_url, save_path)
+                        results[node_id] = downloaded_path
+                        
+                        logger.info(f"节点 {node_id} 截图完成: {downloaded_path} (使用键: {used_key})")
+                        
+                    except Exception as e:
+                        logger.error(f"节点 {node_id} 截图失败: {e}")
+                        results[node_id] = None
+                else:
+                    logger.warning(f"节点 {node_id} 没有获取到图片URL")
+                    # 尝试使用其他可用的键
+                    if image_urls:
+                        available_keys = list(image_urls.keys())
+                        logger.info(f"可用的键: {available_keys}")
+                        # 这里可以选择使用第一个可用的键，或者跳过
+                        results[node_id] = None
+                    else:
+                        results[node_id] = None
+            
+            successful_count = sum(1 for path in results.values() if path is not None)
+            logger.info(f"批量截图完成: {successful_count}/{len(node_ids)} 成功")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"批量获取节点截图失败: {e}")
+            raise
+    
+    def capture_from_figma_url(self, figma_url: str, format: str = "png", 
+                             scale: float = 2.0, save_path: str = None) -> str:
+        """
+        从 Figma URL 直接获取截图
+        Capture screenshot directly from Figma URL
+        
+        Args:
+            figma_url: Figma URL (包含文件ID和节点ID)
+            format: 图片格式
+            scale: 图片缩放比例
+            save_path: 保存路径
+            
+        Returns:
+            保存的文件路径
+        """
+        try:
+            # 解析 Figma URL
+            parsed_info = self.parse_figma_url(figma_url)
+            file_id = parsed_info["file_id"]
+            node_id = parsed_info.get("node_id")
+            
+            if not node_id:
+                raise ValueError("URL 中没有找到节点ID，请提供包含 node-id 参数的完整 URL")
+            
+            # 获取截图
+            return self.capture_node_screenshot(file_id, node_id, format, scale, save_path)
+            
+        except Exception as e:
+            logger.error(f"从 Figma URL 获取截图失败: {e}")
+            raise 

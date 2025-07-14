@@ -512,73 +512,102 @@ def compare_web_figma(website_url, figma_url, selector, classes, device, output_
             console.print(f"❌ 网页截图失败: {e}", style="red")
             return
         
-        # 2. 获取Figma设计稿
-        console.print("🎨 正在获取Figma设计稿...")
-        figma_client = FigmaClient()
+        # 2. 获取Figma设计稿（使用新的API截图服务）
+        console.print("🎨 正在获取Figma设计稿（使用API截图）...")
         
         try:
-            # 解析Figma URL
-            figma_info = figma_client.parse_figma_url(figma_url)
-            file_id = figma_info['file_id']
-            node_id = figma_info.get('node_id')
+            # 导入新的截图服务
+            from src.screenshot.figma_screenshot_service import FigmaScreenshotService
             
-            if not node_id:
-                # 如果没有指定节点，获取文件信息并选择第一个页面
-                file_info = figma_client.get_file_info(file_id)
-                pages = file_info.get('document', {}).get('children', [])
-                if pages:
-                    node_id = pages[0]['id']
-                    console.print(f"🔄 未指定节点，使用第一个页面: {node_id}")
-                else:
-                    raise ValueError("无法找到可用的节点")
+            # 使用新的 Figma API 截图服务
+            figma_screenshot_service = FigmaScreenshotService()
+            figma_image_path = os.path.join(current_output_dir, f"figma_design.png")
             
-            # 导出图片
-            image_urls = figma_client.export_images(
-                file_id=file_id,
-                node_ids=[node_id],
+            # 使用新的 API 截图方法
+            screenshot_path = figma_screenshot_service.capture_figma_node(
+                figma_url=figma_url,
+                output_path=figma_image_path,
                 format="png",
                 scale=2.0
             )
             
-            # 调试信息
-            console.print(f"🔍 导出结果: {len(image_urls) if image_urls else 0} 个URL")
-            if image_urls:
-                for key, url in image_urls.items():
-                    console.print(f"   节点 {key}: {url[:50] if url else 'None'}...")
+            # 如果返回的路径与期望的不同，重命名文件
+            if screenshot_path != figma_image_path and os.path.exists(screenshot_path):
+                import shutil
+                shutil.move(screenshot_path, figma_image_path)
+                console.print(f"🔄 Figma截图文件已重命名: {figma_image_path}")
             
-            if not image_urls:
-                raise ValueError("Figma API没有返回任何图片URL")
-            
-            # 查找可用的图片URL
-            figma_image_url = None
-            actual_node_id = None
-            
-            # 首先尝试原始节点ID
-            if node_id in image_urls and image_urls[node_id]:
-                figma_image_url = image_urls[node_id]
-                actual_node_id = node_id
-            else:
-                # 如果原始节点ID不行，尝试第一个可用的URL
-                for key, url in image_urls.items():
-                    if url:  # 确保URL不为空
-                        figma_image_url = url
-                        actual_node_id = key
-                        break
-            
-            if not figma_image_url:
-                raise ValueError(f"无法找到有效的图片URL。节点ID: {node_id}, 可用节点: {list(image_urls.keys())}")
-            
-            console.print(f"✅ 使用节点 {actual_node_id} 的图片")
-            
-            # 下载图片
-            figma_image_path = os.path.join(current_output_dir, f"figma_design.png")
-            figma_client.download_image(figma_image_url, figma_image_path)
-            
-            console.print(f"✅ Figma设计稿获取完成: {figma_image_path}", style="green")
+            console.print(f"✅ Figma API截图完成: {figma_image_path}", style="green")
             
         except Exception as e:
-            console.print(f"❌ Figma设计稿获取失败: {e}", style="red")
-            return
+            console.print(f"❌ Figma API截图失败，回退到传统方法: {e}", style="yellow")
+            
+            # 回退到传统方法
+            figma_client = FigmaClient()
+            
+            try:
+                # 解析Figma URL
+                figma_info = figma_client.parse_figma_url(figma_url)
+                file_id = figma_info['file_id']
+                node_id = figma_info.get('node_id')
+                
+                if not node_id:
+                    # 如果没有指定节点，获取文件信息并选择第一个页面
+                    file_info = figma_client.get_file_info(file_id)
+                    pages = file_info.get('document', {}).get('children', [])
+                    if pages:
+                        node_id = pages[0]['id']
+                        console.print(f"🔄 未指定节点，使用第一个页面: {node_id}")
+                    else:
+                        raise ValueError("无法找到可用的节点")
+                
+                # 导出图片
+                image_urls = figma_client.export_images(
+                    file_id=file_id,
+                    node_ids=[node_id],
+                    format="png",
+                    scale=2.0
+                )
+                
+                # 调试信息
+                console.print(f"🔍 导出结果: {len(image_urls) if image_urls else 0} 个URL")
+                if image_urls:
+                    for key, url in image_urls.items():
+                        console.print(f"   节点 {key}: {url[:50] if url else 'None'}...")
+                
+                if not image_urls:
+                    raise ValueError("Figma API没有返回任何图片URL")
+                
+                # 查找可用的图片URL
+                figma_image_url = None
+                actual_node_id = None
+                
+                # 首先尝试原始节点ID
+                if node_id in image_urls and image_urls[node_id]:
+                    figma_image_url = image_urls[node_id]
+                    actual_node_id = node_id
+                else:
+                    # 如果原始节点ID不行，尝试第一个可用的URL
+                    for key, url in image_urls.items():
+                        if url:  # 确保URL不为空
+                            figma_image_url = url
+                            actual_node_id = key
+                            break
+                
+                if not figma_image_url:
+                    raise ValueError(f"无法找到有效的图片URL。节点ID: {node_id}, 可用节点: {list(image_urls.keys())}")
+                
+                console.print(f"✅ 使用节点 {actual_node_id} 的图片")
+                
+                # 下载图片
+                figma_image_path = os.path.join(current_output_dir, f"figma_design.png")
+                figma_client.download_image(figma_image_url, figma_image_path)
+                
+                console.print(f"✅ Figma设计稿获取完成（传统方法）: {figma_image_path}", style="green")
+                
+            except Exception as fallback_error:
+                console.print(f"❌ 传统方法也失败: {fallback_error}", style="red")
+                return
         
         # 3. 进行视觉比对
         console.print("🔍 正在进行视觉比对...")

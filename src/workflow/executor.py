@@ -15,6 +15,7 @@ from ..utils.logger import get_logger
 from ..feishu.client import FeishuClient
 from ..ai_analysis.gemini_case_generator import GeminiCaseGenerator
 from ..screenshot.capture import ScreenshotCapture
+from ..screenshot.figma_screenshot_service import FigmaScreenshotService, HybridScreenshotService
 from ..figma.client import FigmaClient
 from ..visual_comparison.comparator import VisualComparator
 
@@ -93,6 +94,8 @@ class WorkflowExecutor:
         self.gemini_generator = GeminiCaseGenerator()
         self.screenshot_capture = None  # 延迟初始化以节省内存
         self.figma_client = None       # 延迟初始化以节省内存
+        self.figma_screenshot_service = None  # 延迟初始化以节省内存
+        self.hybrid_screenshot_service = None  # 延迟初始化以节省内存
         self.visual_comparator = None  # 延迟初始化以节省内存
         
         # 资源监控
@@ -142,6 +145,14 @@ class WorkflowExecutor:
             logger.info("初始化Figma客户端")
             self.figma_client = FigmaClient()
             
+        elif component_name == 'figma_screenshot_service' and self.figma_screenshot_service is None:
+            logger.info("初始化Figma截图服务")
+            self.figma_screenshot_service = FigmaScreenshotService()
+            
+        elif component_name == 'hybrid_screenshot_service' and self.hybrid_screenshot_service is None:
+            logger.info("初始化混合截图服务")
+            self.hybrid_screenshot_service = HybridScreenshotService(prefer_figma_api=True)
+            
         elif component_name == 'visual_comparator' and self.visual_comparator is None:
             logger.info("初始化视觉比较器")
             self.visual_comparator = VisualComparator()
@@ -160,6 +171,22 @@ class WorkflowExecutor:
         elif component_name == 'figma_client' and self.figma_client:
             self.figma_client = None
             logger.info("已清理Figma客户端")
+            
+        elif component_name == 'figma_screenshot_service' and self.figma_screenshot_service:
+            try:
+                self.figma_screenshot_service.cleanup()
+                self.figma_screenshot_service = None
+                logger.info("已清理Figma截图服务")
+            except Exception as e:
+                logger.warning(f"清理Figma截图服务失败: {e}")
+                
+        elif component_name == 'hybrid_screenshot_service' and self.hybrid_screenshot_service:
+            try:
+                self.hybrid_screenshot_service.cleanup()
+                self.hybrid_screenshot_service = None
+                logger.info("已清理混合截图服务")
+            except Exception as e:
+                logger.warning(f"清理混合截图服务失败: {e}")
             
         elif component_name == 'visual_comparator' and self.visual_comparator:
             self.visual_comparator = None
@@ -436,69 +463,91 @@ class WorkflowExecutor:
             
             self._log_resource_usage("网页截图完成")
             
-            # 2. Figma截图 (按需初始化Figma客户端)
-            self._initialize_component_if_needed('figma_client')
+            # 2. Figma截图 (使用新的API截图服务)
+            self._initialize_component_if_needed('figma_screenshot_service')
             figma_image_path = os.path.join(current_output_dir, "figma_design.png")
             
-            logger.info("开始Figma设计稿获取")
-            # 解析Figma URL
-            figma_info = self.figma_client.parse_figma_url(figma_url)
+            logger.info("开始Figma设计稿获取（使用API截图）")
             
-            # 导出Figma图片
-            node_id = figma_info.get('node_id')
-            if not node_id:
-                # 如果没有节点ID，获取文件信息并使用第一个页面
-                file_info = self.figma_client.get_file_info(figma_info['file_id'])
-                pages = file_info.get('document', {}).get('children', [])
-                if pages:
-                    node_id = pages[0]['id']
-                else:
-                    raise ValueError("无法找到可用的节点ID")
-            
-            # 调用export_images方法（注意是复数形式）
-            image_urls = self.figma_client.export_images(
-                file_id=figma_info['file_id'],
-                node_ids=[node_id],
-                format='png',
-                scale=2.0
-            )
-            
-            # 获取图片URL - 处理节点ID格式转换
-            if not image_urls:
-                raise ValueError(f"Figma API没有返回任何图片URL")
-            
-            # 尝试不同的节点ID格式（URL格式和API格式）
-            figma_image_url = None
-            actual_node_id = None
-            
-            # 方法1：直接使用原始节点ID
-            if node_id in image_urls and image_urls[node_id]:
-                figma_image_url = image_urls[node_id]
-                actual_node_id = node_id
-            
-            # 方法2：转换横线为冒号（URL格式 -> API格式）
-            if not figma_image_url:
-                api_format_node_id = node_id.replace('-', ':')
-                if api_format_node_id in image_urls and image_urls[api_format_node_id]:
-                    figma_image_url = image_urls[api_format_node_id]
-                    actual_node_id = api_format_node_id
-            
-            # 方法3：使用第一个可用的URL
-            if not figma_image_url:
-                for key, url in image_urls.items():
-                    if url:  # 确保URL不为空
-                        figma_image_url = url
-                        actual_node_id = key
-                        break
-            
-            if not figma_image_url:
-                available_nodes = list(image_urls.keys())
-                raise ValueError(f"无法获取节点 {node_id} 的图片URL。可用节点: {available_nodes}")
-            
-            logger.info(f"使用节点ID: {actual_node_id} (原始: {node_id})")
-            
-            # 下载Figma图片
-            self.figma_client.download_image(figma_image_url, figma_image_path)
+            try:
+                # 使用新的 Figma API 截图服务
+                screenshot_path = self.figma_screenshot_service.capture_figma_node(
+                    figma_url=figma_url,
+                    output_path=figma_image_path,
+                    format="png",
+                    scale=2.0
+                )
+                
+                # 如果返回的路径与期望的不同，重命名文件
+                if screenshot_path != figma_image_path and os.path.exists(screenshot_path):
+                    import shutil
+                    shutil.move(screenshot_path, figma_image_path)
+                    logger.info(f"Figma截图文件已重命名: {figma_image_path}")
+                
+                logger.info(f"Figma API截图完成: {figma_image_path}")
+                
+            except Exception as e:
+                logger.warning(f"Figma API截图失败，回退到传统方法: {e}")
+                
+                # 回退到传统方法
+                self._initialize_component_if_needed('figma_client')
+                figma_info = self.figma_client.parse_figma_url(figma_url)
+                
+                # 导出Figma图片
+                node_id = figma_info.get('node_id')
+                if not node_id:
+                    # 如果没有节点ID，获取文件信息并使用第一个页面
+                    file_info = self.figma_client.get_file_info(figma_info['file_id'])
+                    pages = file_info.get('document', {}).get('children', [])
+                    if pages:
+                        node_id = pages[0]['id']
+                    else:
+                        raise ValueError("无法找到可用的节点ID")
+                
+                # 调用export_images方法
+                image_urls = self.figma_client.export_images(
+                    file_id=figma_info['file_id'],
+                    node_ids=[node_id],
+                    format='webp',
+                    scale=2.0
+                )
+                
+                # 获取图片URL - 处理节点ID格式转换
+                if not image_urls:
+                    raise ValueError(f"Figma API没有返回任何图片URL")
+                
+                # 尝试不同的节点ID格式（URL格式和API格式）
+                figma_image_url = None
+                actual_node_id = None
+                
+                # 方法1：直接使用原始节点ID
+                if node_id in image_urls and image_urls[node_id]:
+                    figma_image_url = image_urls[node_id]
+                    actual_node_id = node_id
+                
+                # 方法2：转换横线为冒号（URL格式 -> API格式）
+                if not figma_image_url:
+                    api_format_node_id = node_id.replace('-', ':')
+                    if api_format_node_id in image_urls and image_urls[api_format_node_id]:
+                        figma_image_url = image_urls[api_format_node_id]
+                        actual_node_id = api_format_node_id
+                
+                # 方法3：使用第一个可用的URL
+                if not figma_image_url:
+                    for key, url in image_urls.items():
+                        if url:  # 确保URL不为空
+                            figma_image_url = url
+                            actual_node_id = key
+                            break
+                
+                if not figma_image_url:
+                    available_nodes = list(image_urls.keys())
+                    raise ValueError(f"无法获取节点 {node_id} 的图片URL。可用节点: {available_nodes}")
+                
+                logger.info(f"使用节点ID: {actual_node_id} (原始: {node_id})")
+                
+                # 下载Figma图片
+                self.figma_client.download_image(figma_image_url, figma_image_path)
             
             # 3. 视觉比较 (按需初始化视觉比较器)
             self._initialize_component_if_needed('visual_comparator')
@@ -519,6 +568,8 @@ class WorkflowExecutor:
             # 5. 清理组件以释放内存
             self._cleanup_component('screenshot_capture')
             self._cleanup_component('figma_client')
+            self._cleanup_component('figma_screenshot_service')
+            self._cleanup_component('hybrid_screenshot_service')
             self._cleanup_component('visual_comparator')
             
             self._log_resource_usage("组件清理完成")

@@ -461,3 +461,12 @@ gengxin444得到的1212pppp
 
 
 # 未知意图，通过接入 Gemini 来实现
+
+
+# 测试 figma 截图， 改用 api 的方式进行获取 
+
+# 使用新的 Figma URL 进行比对
+python main.py compare-web-figma \
+  --figma-url "https://www.figma.com/design/VHgFAzQGYpZtOgYJxk609O/25%E5%85%A8%E5%B1%80%E8%BF%AD%E4%BB%A3?node-id=6862-67203&m=dev" \
+  --website-url "https://www.kalodata.com/explore:/html/body/div[1]/div/div[2]/div[1]/div/div[1]/div/div/div" \
+  --output-dir "reports"
