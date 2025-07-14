@@ -4,7 +4,7 @@ import { cn } from '../utils';
 import { toast } from 'react-hot-toast';
 
 interface ChatInputProps {
-  onSendMessage: (message: string, device?: string) => void;
+  onSendMessage: (message: string, device?: string, cookies?: string, localStorage?: string) => void;
   isLoading?: boolean;
   placeholder?: string;
   className?: string;
@@ -22,6 +22,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
   const [isRecording, setIsRecording] = useState(false);
   const [selectedDevice, setSelectedDevice] = useState<'desktop' | 'mobile' | 'tablet'>('desktop');
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [cookies, setCookies] = useState('');
+  const [localStorage, setLocalStorage] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Device options configuration
@@ -52,15 +55,15 @@ const ChatInput: React.FC<ChatInputProps> = ({
     const trimmedMessage = message.trim();
     if (!trimmedMessage || isLoading || disabled) return;
 
-    // 直接传递设备参数而不是追加到消息文本中
-    onSendMessage(trimmedMessage, selectedDevice);
+    // 传递所有参数到后端
+    onSendMessage(trimmedMessage, selectedDevice, cookies, localStorage);
     setMessage('');
     
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-  }, [message, isLoading, disabled, selectedDevice, onSendMessage]);
+  }, [message, isLoading, disabled, selectedDevice, cookies, localStorage, onSendMessage]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -106,7 +109,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
       "flex flex-col gap-2 p-4 bg-white border-t border-gray-200",
       className
     )}>
-      {/* Device Selector */}
+      {/* Device Selector and Advanced Options */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-600">设备:</span>
@@ -153,23 +156,87 @@ const ChatInput: React.FC<ChatInputProps> = ({
               </div>
             )}
           </div>
+          
+          {/* Advanced Options Button */}
+          <button
+            onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+            disabled={disabled || isLoading}
+            className={cn(
+              "flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg transition-colors",
+              "focus:outline-none focus:ring-2 focus:ring-blue-500",
+              (disabled || isLoading) && "opacity-50 cursor-not-allowed",
+              showAdvancedOptions && "bg-blue-100"
+            )}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            <span>高级设置</span>
+          </button>
         </div>
         
         <div className="text-xs text-gray-500">
-          💡 视觉对比时将使用所选设备进行测试（任务可能需要1-5分钟）<br/>
-          <span className="block mt-1">
-            <b>如需测试登录态请设置 cookie：</b><br/>
-            <code>"SESSION": "OGZmYmU1MGEtZDc3ZC00ZGJkLWI5N2YtODE5MTgzMjAzMmRi", "deviceId": "4b609475-5a78-479b-8315-7e9df9cec2cd", ...&#125;</code>
-          </span>
-          <span className="block mt-1">
-            <b>如需设置页面状态请设置 localStorage：</b><br/>
-            <code>localStorage: &#123;<br/>
-            &nbsp;&nbsp;PHONE:86:15605889409|GlobalNotify-266: "true", // 关闭首次登录出现的弹窗<br/>
-            &nbsp;&nbsp;language: "es-ES" // 西班牙语<br/>
-            &#125;</code>
-          </span>
+          💡 视觉对比时将使用所选设备进行测试（任务可能需要1-5分钟）
         </div>
       </div>
+
+      {/* Advanced Options Panel */}
+      {showAdvancedOptions && (
+        <div className="bg-gray-50 rounded-lg p-4 space-y-4">
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">
+              🍪 Cookie 设置
+              <span className="text-xs text-gray-500 ml-1">(可选，用于登录态测试)</span>
+            </label>
+            <textarea
+              value={cookies}
+              onChange={(e) => setCookies(e.target.value)}
+              placeholder="输入cookie字符串，例如：SESSION=xxx; deviceId=xxx; _ga=xxx..."
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              rows={3}
+              disabled={disabled || isLoading}
+            />
+            <div className="text-xs text-gray-500">
+              格式：name=value; name2=value2; name3=value3
+            </div>
+          </div>
+          
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">
+              💾 localStorage 设置
+              <span className="text-xs text-gray-500 ml-1">(可选，用于页面状态设置)</span>
+            </label>
+            <textarea
+              value={localStorage}
+              onChange={(e) => setLocalStorage(e.target.value)}
+              placeholder="输入localStorage JSON格式，例如：{&quot;language&quot;: &quot;es-ES&quot;, &quot;PHONE:86:15605889409|GlobalNotify-266&quot;: &quot;true&quot;}"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              rows={3}
+              disabled={disabled || isLoading}
+            />
+            <div className="text-xs text-gray-500">
+              格式：{"{"}"key": "value", "key2": "value2"{"}"}
+            </div>
+          </div>
+          
+          <div className="flex items-center justify-between text-xs text-gray-500">
+            <div>
+              💡 这些设置将用于视觉对比测试中的页面状态控制
+            </div>
+            <button
+              onClick={() => {
+                setCookies('');
+                setLocalStorage('');
+              }}
+              className="text-blue-600 hover:text-blue-800 underline"
+              disabled={disabled || isLoading}
+            >
+              清空设置
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Input Section */}
       <div className="flex items-center gap-2">

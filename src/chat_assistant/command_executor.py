@@ -202,17 +202,21 @@ class CommandExecutor:
         website_url = intent.parameters.get('website_url')
         xpath_selector = intent.parameters.get('xpath_selector')
         device = intent.parameters.get('device', 'desktop')
+        cookies = intent.parameters.get('cookies')
+        local_storage = intent.parameters.get('local_storage')
         
         if context:
             figma_url = figma_url or context.get('figma_url')
             website_url = website_url or context.get('website_url')
             xpath_selector = xpath_selector or context.get('xpath_selector')
             device = context.get('device', device)
+            cookies = cookies or context.get('cookies')
+            local_storage = local_storage or context.get('local_storage')
         
         if not figma_url or not website_url:
             return ExecutionResult(
                 success=False,
-                message="需要提供Figma URL和网站URL才能进行视觉对比。\n例如：'视觉对比 网站: https://example.com Figma: https://figma.com/xxx'\n\n**使用提示:**\n- 需要同时提供Figma URL和网站URL\n- 格式: '视觉对比 网站: https://example.com Figma: https://figma.com/xxx'\n- 或者分别提供: '对比 https://example.com 和 https://figma.com/xxx'\n- 支持XPath选择器: '视觉对比 https://example.com:/html/body/div[1] Figma: https://figma.com/xxx'\n- 可选择设备类型: 桌面端(默认)、移动端、平板端\n- 添加设备示例: '视觉对比 网站: https://example.com Figma: https://figma.com/xxx 移动端'",
+                message="需要提供Figma URL和网站URL才能进行视觉对比。\n例如：'视觉对比 网站: https://example.com Figma: https://figma.com/xxx'\n\n**使用提示:**\n- 需要同时提供Figma URL和网站URL\n- 格式: '视觉对比 网站: https://example.com Figma: https://figma.com/xxx'\n- 或者分别提供: '对比 https://example.com 和 https://figma.com/xxx'\n- 支持XPath选择器: '视觉对比 https://example.com:/html/body/div[1] Figma: https://figma.com/xxx'\n- 可选择设备类型: 桌面端(默认)、移动端、平板端\n- 添加设备示例: '视觉对比 网站: https://example.com Figma: https://figma.com/xxx 移动端'\n- 支持Cookie注入: 'cookie: SESSION=xxx; deviceId=xxx'\n- 支持localStorage: 'localStorage: {language: \"es-ES\"}'",
                 error="Missing required URLs"
             )
         
@@ -230,7 +234,9 @@ class CommandExecutor:
                 website_url=website_url,
                 xpath_selector=xpath_selector,
                 device=device,
-                output_dir=self.default_config['output_dir']
+                output_dir=self.default_config['output_dir'],
+                cookies=cookies,
+                local_storage=local_storage
             )
             
             return ExecutionResult(
@@ -241,9 +247,11 @@ class CommandExecutor:
                     'website_url': website_url,
                     'xpath_selector': xpath_selector,
                     'device': device,
-                    'similarity_score': result.get('similarity_score', 0),
+                    'cookies_injected': bool(cookies),
+                    'localstorage_injected': bool(local_storage),
+                    'similarity_score': result.get('comparison_result', {}).get('similarity_score', 0),
                     'output_directory': result.get('output_directory', ''),
-                    'comparison_images': result.get('comparison_images', [])
+                    'comparison_images': result.get('comparison_result', {}).get('diff_image_path', '')
                 }
             )
             

@@ -87,11 +87,13 @@ class ChatApi {
     );
   }
 
-  async sendMessage(message: string, sessionId?: string, device?: string): Promise<ChatResponse> {
+  async sendMessage(message: string, sessionId?: string, device?: string, cookies?: string, localStorage?: string): Promise<ChatResponse> {
     const response = await this.api.post('/chat', {
       message,
       session_id: sessionId,
       device: device || 'desktop', // 添加设备参数
+      cookies: cookies || '', // 添加cookie参数
+      localStorage: localStorage || '', // 添加localStorage参数
     });
     
     // 适配后端响应格式

@@ -33,7 +33,8 @@ class ChatAssistant:
         logger.info("聊天助手初始化完成")
     
     def process_message(self, message: str, session_id: Optional[str] = None, 
-                       user_id: Optional[str] = None, device: Optional[str] = None) -> Dict[str, Any]:
+                       user_id: Optional[str] = None, device: Optional[str] = None,
+                       cookies: Optional[str] = None, localStorage: Optional[str] = None) -> Dict[str, Any]:
         """
         处理用户消息并返回响应
         
@@ -42,6 +43,8 @@ class ChatAssistant:
             session_id: 会话ID（可选，自动生成）
             user_id: 用户ID（可选）
             device: 设备类型（可选，默认为desktop）
+            cookies: Cookie字符串（可选）
+            localStorage: localStorage字符串（可选）
             
         Returns:
             包含响应和元数据的字典
@@ -74,6 +77,12 @@ class ChatAssistant:
                 context_params['device'] = device
             else:
                 context_params.setdefault('device', 'desktop')  # 默认为desktop
+            
+            # 添加cookie和localStorage信息到上下文参数
+            if cookies:
+                context_params['cookies'] = cookies
+            if localStorage:
+                context_params['local_storage'] = localStorage
             
             # 执行命令
             execution_result = self.command_executor.execute_intent(intent, context_params)

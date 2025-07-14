@@ -108,6 +108,10 @@ class ScreenshotCapture:
         options.add_experimental_option("useAutomationExtension", False)
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         
+        # 设置User-Agent以模拟真实浏览器
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+        options.add_argument(f"--user-agent={user_agent}")
+        
         logger.info(f"设置Chrome用户数据目录: {self.temp_user_data_dir}")
         return options
         
@@ -463,17 +467,11 @@ class ScreenshotCapture:
             self.driver.get(base_url)
             time.sleep(1)
 
-            # 设置 Cookie
+            # 设置 Cookie - 使用增强的cookie设置方法
             if cookies:
                 logger.info(f"设置Cookie: {cookies}")
                 domain = self.driver.execute_script("return document.domain;")
-                for name, value in cookies.items():
-                    try:
-                        self.driver.add_cookie({'name': name, 'value': value, 'domain': domain})
-                    except Exception as e:
-                        logger.warning(f"设置Cookie失败: {name}={value}, 错误: {e}")
-                # 刷新页面以使Cookie生效
-                self.driver.refresh()
+                self._set_enhanced_cookies(cookies, domain)
                 time.sleep(1)
 
             # 设置 localStorage
@@ -616,11 +614,11 @@ class ScreenshotCapture:
             # 访问页面
             self.driver.get(base_url)
             
-            # 注入 cookies
+            # 注入 cookies - 使用增强的cookie设置方法
             if cookies:
                 logger.info(f"注入 {len(cookies)} 个 cookies")
-                for name, value in cookies.items():
-                    self.driver.add_cookie({"name": name, "value": value})
+                current_domain = self.driver.execute_script("return document.domain;")
+                self._set_enhanced_cookies(cookies, current_domain)
             
             # 在页面加载后注入 localStorage
             if local_storage:
@@ -635,9 +633,40 @@ class ScreenshotCapture:
             
             # 如果有注入设置，刷新页面
             if cookies or local_storage or browser_language:
+                # 在刷新前记录SESSION cookie值
+                original_session_cookie = None
+                if cookies:
+                    if isinstance(cookies, str):
+                        cookies_list = self._parse_cookie_string(cookies)
+                        for cookie in cookies_list:
+                            if cookie['name'] == 'SESSION':
+                                original_session_cookie = cookie['value']
+                                break
+                    else:
+                        original_session_cookie = cookies.get('SESSION')
+                
                 logger.info("刷新页面以应用注入的设置...")
                 self.driver.refresh()
                 time.sleep(2)
+                
+                # 刷新后验证SESSION cookie
+                if original_session_cookie:
+                    try:
+                        current_cookies = self.driver.get_cookies()
+                        current_session_cookie = None
+                        for cookie in current_cookies:
+                            if cookie['name'] == 'SESSION':
+                                current_session_cookie = cookie['value']
+                                break
+                        
+                        if current_session_cookie == original_session_cookie:
+                            logger.info(f"✅ SESSION cookie验证成功: {current_session_cookie[:20]}...")
+                        else:
+                            logger.warning(f"❌ SESSION cookie不匹配!")
+                            logger.warning(f"原始SESSION: {original_session_cookie[:20]}...")
+                            logger.warning(f"当前SESSION: {current_session_cookie[:20] if current_session_cookie else '(无)'}")
+                    except Exception as e:
+                        logger.error(f"SESSION cookie验证失败: {e}")
             
             # 设置语言
             self._set_language()
@@ -712,44 +741,115 @@ class ScreenshotCapture:
             logger.info(f"正在访问页面: {url}")
             self.driver.get(url)
             
-            # 注入 cookies
-            if cookies:
-                # 支持字符串自动解析
-                if isinstance(cookies, str):
-                    cookies_list = self._parse_cookie_string(cookies)
-                    logger.info(f"注入 {len(cookies_list)} 个 cookies (字符串模式)")
-                    for cookie in cookies_list:
-                        try:
-                            self.driver.add_cookie(cookie)
-                        except Exception as e:
-                            logger.warning(f"注入 cookie 失败: {cookie['name']} - {e}")
-                else:
-                    logger.info(f"注入 {len(cookies)} 个 cookies")
-                    for name, value in cookies.items():
-                        self.driver.add_cookie({"name": name, "value": value})
+            # 注入 cookies - 使用增强的cookie设置方法
+            if cookies and self.driver:
+                # 获取当前域名
+                current_domain = self.driver.execute_script("return document.domain;")
+                logger.info(f"当前域名: {current_domain}")
+                
+                # 使用增强的cookie设置方法
+                self._set_enhanced_cookies(cookies, current_domain)
+                    
+            elif not self.driver:
+                logger.error("Driver未初始化，无法注入cookies")
             
             # 在页面加载后注入 localStorage
-            if local_storage:
-                logger.info(f"注入 {len(local_storage)} 个 localStorage 项")
-                for key, value in local_storage.items():
-                    self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+            if local_storage and self.driver:
+                # 处理localStorage参数，支持字符串和字典两种格式
+                if isinstance(local_storage, str):
+                    try:
+                        # 尝试解析JSON格式的localStorage字符串
+                        import json
+                        local_storage_dict = json.loads(local_storage)
+                        logger.info(f"注入 {len(local_storage_dict)} 个 localStorage 项 (JSON字符串模式)")
+                        for key, value in local_storage_dict.items():
+                            if self.driver:  # 检查driver状态
+                                self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+                            else:
+                                logger.error("Driver已失效，停止localStorage注入")
+                                break
+                    except (json.JSONDecodeError, ValueError):
+                        # 如果JSON解析失败，尝试解析简单的键值对格式
+                        logger.info(f"注入 localStorage 项 (简单字符串模式)")
+                        # 移除大括号
+                        local_storage_str = local_storage.strip()
+                        if local_storage_str.startswith('{') and local_storage_str.endswith('}'):
+                            local_storage_str = local_storage_str[1:-1]
+                        
+                        # 分割键值对
+                        pairs = local_storage_str.split(',')
+                        for pair in pairs:
+                            if ':' in pair:
+                                key, value = pair.split(':', 1)
+                                key = key.strip().strip('"\'')
+                                value = value.strip().strip('"\'')
+                                # 处理转义的引号
+                                value = value.replace('\\"', '"')
+                                if self.driver:  # 检查driver状态
+                                    self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+                                else:
+                                    logger.error("Driver已失效，停止localStorage注入")
+                                    break
+                else:
+                    # 字典格式
+                    logger.info(f"注入 {len(local_storage)} 个 localStorage 项 (字典模式)")
+                    for key, value in local_storage.items():
+                        if self.driver:  # 检查driver状态
+                            self.driver.execute_script(f"localStorage.setItem('{key}', '{value}');")
+                        else:
+                            logger.error("Driver已失效，停止localStorage注入")
+                            break
+            elif not self.driver:
+                logger.error("Driver未初始化，无法注入localStorage")
             
             # 设置浏览器语言
-            if browser_language:
+            if browser_language and self.driver:
                 logger.info(f"设置浏览器语言: {browser_language}")
                 self.driver.execute_script(f"localStorage.setItem('language', '{browser_language}');")
             
             # 如果有注入设置，刷新页面
-            if cookies or local_storage or browser_language:
+            if (cookies or local_storage or browser_language) and self.driver:
+                # 在刷新前记录SESSION cookie值
+                original_session_cookie = None
+                if cookies:
+                    if isinstance(cookies, str):
+                        cookies_list = self._parse_cookie_string(cookies)
+                        for cookie in cookies_list:
+                            if cookie['name'] == 'SESSION':
+                                original_session_cookie = cookie['value']
+                                break
+                    else:
+                        original_session_cookie = cookies.get('SESSION')
+                
                 logger.info("刷新页面以应用注入的设置...")
                 self.driver.refresh()
                 time.sleep(2)
+                
+                # 刷新后验证SESSION cookie
+                if original_session_cookie:
+                    try:
+                        current_cookies = self.driver.get_cookies()
+                        current_session_cookie = None
+                        for cookie in current_cookies:
+                            if cookie['name'] == 'SESSION':
+                                current_session_cookie = cookie['value']
+                                break
+                        
+                        if current_session_cookie == original_session_cookie:
+                            logger.info(f"✅ SESSION cookie验证成功: {current_session_cookie[:20]}...")
+                        else:
+                            logger.warning(f"❌ SESSION cookie不匹配!")
+                            logger.warning(f"原始SESSION: {original_session_cookie[:20]}...")
+                            logger.warning(f"当前SESSION: {current_session_cookie[:20] if current_session_cookie else '(无)'}")
+                    except Exception as e:
+                        logger.error(f"SESSION cookie验证失败: {e}")
             
             # 设置语言
-            self._set_language()
+            if self.driver:
+                self._set_language()
             
             # 为移动端设备设置localStorage
-            if device in mobile_devices:
+            if device in mobile_devices and self.driver:
                 logger.info("设置移动端localStorage...")
                 # 设置 h5_kalodata_first_open
                 self.driver.execute_script("localStorage.setItem('h5_kalodata_first_open', 'true');")
@@ -1041,6 +1141,11 @@ class ScreenshotCapture:
     @staticmethod
     def _parse_cookie_string(cookie_str: str):
         """将cookie字符串解析为Selenium可用的cookie字典列表"""
+        # 移除字符串前后的转义双引号
+        cookie_str = cookie_str.strip()
+        if cookie_str.startswith('"') and cookie_str.endswith('"'):
+            cookie_str = cookie_str[1:-1]
+        
         cookies = []
         for item in cookie_str.split(';'):
             if '=' in item:
@@ -1349,3 +1454,409 @@ class ScreenshotCapture:
                     logger.warning(f"清理 {file_path} 失败: {e}")
         else:
             os.makedirs(reports_dir, exist_ok=True) 
+
+    def diagnose_cookie_issue(self, url: str, expected_cookies: str, device: str = 'desktop') -> dict:
+        """
+        诊断cookie设置问题
+        
+        Args:
+            url: 目标URL
+            expected_cookies: 期望的cookie字符串
+            device: 设备类型
+            
+        Returns:
+            诊断结果字典
+        """
+        try:
+            # 确保设备类型不为空，默认为desktop
+            device = device or 'desktop'
+            
+            # 获取设备尺寸
+            device_size = self.DEVICE_SIZES.get(device, self.DEVICE_SIZES['desktop'])
+            
+            # 判断设备类型是否为移动设备
+            mobile_devices = ['mobile', 'iphone', 'android']
+            device_type = 'mobile' if device in mobile_devices else 'desktop'
+            
+            self._setup_driver(device_size, device_type=device_type)
+            
+            # 解析期望的cookies
+            expected_cookies_list = self._parse_cookie_string(expected_cookies)
+            
+            # 访问页面
+            logger.info(f"正在访问页面进行cookie诊断: {url}")
+            self.driver.get(url)
+            time.sleep(2)
+            
+            # 获取当前域名和URL信息
+            current_domain = self.driver.execute_script("return document.domain;")
+            current_url = self.driver.current_url
+            is_https = current_url.startswith('https://')
+            
+            logger.info(f"当前域名: {current_domain}")
+            logger.info(f"当前URL: {current_url}")
+            logger.info(f"是否HTTPS: {is_https}")
+            
+            # 尝试设置每个cookie并记录结果
+            cookie_results = {}
+            
+            for expected_cookie in expected_cookies_list:
+                cookie_name = expected_cookie['name']
+                cookie_value = expected_cookie['value']
+                
+                logger.info(f"\n--- 诊断cookie: {cookie_name} ---")
+                
+                # 尝试设置cookie
+                try:
+                    cookie_dict = {
+                        'name': cookie_name,
+                        'value': cookie_value,
+                        'domain': current_domain,
+                        'path': '/',
+                    }
+                    
+                    if is_https:
+                        cookie_dict['secure'] = True
+                    
+                    self.driver.add_cookie(cookie_dict)
+                    
+                    # 验证cookie是否设置成功
+                    current_cookies = self.driver.get_cookies()
+                    found_cookie = None
+                    for cookie in current_cookies:
+                        if cookie['name'] == cookie_name:
+                            found_cookie = cookie
+                            break
+                    
+                    if found_cookie:
+                        if found_cookie['value'] == cookie_value:
+                            logger.info(f"✅ {cookie_name} 设置成功")
+                            cookie_results[cookie_name] = {
+                                'status': 'success',
+                                'expected': cookie_value,
+                                'actual': found_cookie['value'],
+                                'domain': found_cookie.get('domain'),
+                                'path': found_cookie.get('path'),
+                                'secure': found_cookie.get('secure', False),
+                                'httpOnly': found_cookie.get('httpOnly', False)
+                            }
+                        else:
+                            logger.warning(f"❌ {cookie_name} 值不匹配")
+                            logger.warning(f"期望值: {cookie_value[:30]}...")
+                            logger.warning(f"实际值: {found_cookie['value'][:30]}...")
+                            cookie_results[cookie_name] = {
+                                'status': 'value_mismatch',
+                                'expected': cookie_value,
+                                'actual': found_cookie['value']
+                            }
+                    else:
+                        logger.warning(f"❌ {cookie_name} 未找到")
+                        cookie_results[cookie_name] = {
+                            'status': 'not_found',
+                            'expected': cookie_value,
+                            'actual': None
+                        }
+                        
+                except Exception as e:
+                    logger.error(f"❌ {cookie_name} 设置失败: {e}")
+                    cookie_results[cookie_name] = {
+                        'status': 'error',
+                        'expected': cookie_value,
+                        'error': str(e)
+                    }
+            
+            # 刷新页面并再次检查
+            logger.info("\n--- 刷新页面后检查 ---")
+            self.driver.refresh()
+            time.sleep(2)
+            
+            after_refresh_cookies = self.driver.get_cookies()
+            logger.info(f"刷新后cookie数量: {len(after_refresh_cookies)}")
+            
+            # 检查关键cookie是否还在
+            key_cookies = ['SESSION', 'deviceId', 'AGL_USER_ID']
+            for key_cookie in key_cookies:
+                found = False
+                for cookie in after_refresh_cookies:
+                    if cookie['name'] == key_cookie:
+                        logger.info(f"✅ {key_cookie} 仍存在: {cookie['value'][:20]}...")
+                        found = True
+                        break
+                if not found:
+                    logger.warning(f"❌ {key_cookie} 刷新后丢失")
+            
+            # 检查页面是否显示登录态
+            try:
+                # 检查是否有登录相关的元素
+                page_source = self.driver.page_source
+                login_indicators = ['登录', 'login', '注册', 'register', 'sign in', 'sign up']
+                logout_indicators = ['退出', 'logout', '用户', 'user', 'profile', '个人']
+                
+                has_login_elements = any(indicator in page_source.lower() for indicator in login_indicators)
+                has_logout_elements = any(indicator in page_source.lower() for indicator in logout_indicators)
+                
+                logger.info(f"页面包含登录元素: {has_login_elements}")
+                logger.info(f"页面包含用户元素: {has_logout_elements}")
+                
+            except Exception as e:
+                logger.warning(f"页面内容检查失败: {e}")
+            
+            # 返回诊断结果
+            return {
+                'url': url,
+                'domain': current_domain,
+                'is_https': is_https,
+                'cookie_results': cookie_results,
+                'total_cookies_after_refresh': len(after_refresh_cookies),
+                'diagnosis_complete': True
+            }
+            
+        except Exception as e:
+            logger.error(f"Cookie诊断失败: {e}")
+            return {
+                'error': str(e),
+                'diagnosis_complete': False
+            }
+        finally:
+            # 确保清理资源
+            self._cleanup_processes() 
+
+    def _set_enhanced_cookies(self, cookies, current_domain):
+        """增强的cookie设置方法，更好地处理SESSION等重要认证cookie"""
+        if not cookies:
+            return
+            
+        logger.info(f"开始设置增强cookies到域: {current_domain}")
+        
+        # 首先删除所有现有的SESSION cookie，避免冲突
+        try:
+            existing_cookies = self.driver.get_cookies()
+            session_cookies = [c for c in existing_cookies if c['name'] == 'SESSION']
+            
+            if session_cookies:
+                logger.info(f"发现 {len(session_cookies)} 个现有SESSION cookie，准备删除")
+                for cookie in session_cookies:
+                    try:
+                        self.driver.delete_cookie('SESSION')
+                        logger.info(f"删除SESSION cookie: 域={cookie.get('domain')}, HttpOnly={cookie.get('httpOnly')}")
+                    except Exception as e:
+                        logger.warning(f"删除SESSION cookie失败: {e}")
+                        
+                # 等待一下让删除生效
+                time.sleep(1)
+        except Exception as e:
+            logger.warning(f"清理SESSION cookie时出错: {e}")
+        
+        # 解析cookies为统一格式
+        parsed_cookies = []
+        
+        if isinstance(cookies, str):
+            # 字符串格式cookie解析
+            cookies_list = self._parse_cookie_string(cookies)
+            for cookie in cookies_list:
+                parsed_cookies.append(cookie)
+        elif isinstance(cookies, list):
+            # 列表格式
+            for cookie in cookies:
+                if isinstance(cookie, dict):
+                    parsed_cookies.append(cookie)
+        elif isinstance(cookies, dict):
+            # 字典格式
+            for name, value in cookies.items():
+                parsed_cookies.append({'name': name, 'value': value})
+        
+        # 确定正确的域名（使用主域名，不包含www.）
+        if current_domain.startswith('www.'):
+            main_domain = current_domain[4:]  # 去掉www.
+        else:
+            main_domain = current_domain
+        
+        # 特殊cookie处理规则
+        special_cookies = {
+            'SESSION': [
+                # 设置两个版本的SESSION cookie
+                {
+                    'path': '/',
+                    'domain': f'.{main_domain}',  # 主域名版本
+                    'secure': True,
+                    'sameSite': 'Lax'
+                    # 不设置httpOnly，让JavaScript可以读取
+                },
+                {
+                    'path': '/',
+                    'domain': f'.{main_domain}',  # 主域名版本
+                    'secure': True,
+                    'httpOnly': True,
+                    'sameSite': 'Lax'
+                    # HttpOnly版本，用于服务器端验证
+                }
+            ],
+            'deviceId': {
+                'path': '/',
+                'domain': f'.{main_domain}',
+                'secure': True,
+                'sameSite': 'Lax'
+            },
+            'AGL_USER_ID': {
+                'path': '/',
+                'domain': f'.{main_domain}',
+                'secure': True,
+                'sameSite': 'Lax'
+            }
+        }
+        
+        success_count = 0
+        failure_count = 0
+        
+        for cookie in parsed_cookies:
+            try:
+                cookie_name = cookie.get('name')
+                cookie_value = cookie.get('value')
+                
+                if not cookie_name or not cookie_value:
+                    logger.warning(f"跳过无效cookie: {cookie}")
+                    continue
+                
+                # 特殊处理SESSION cookie
+                if cookie_name == 'SESSION':
+                    logger.info(f"特殊处理SESSION cookie: {cookie_value[:20]}...")
+                    
+                    # 设置两个版本的SESSION cookie
+                    for i, session_config in enumerate(special_cookies['SESSION']):
+                        cookie_dict = {
+                            'name': cookie_name,
+                            'value': cookie_value,
+                        }
+                        cookie_dict.update(session_config)
+                        
+                        version_name = "JavaScript可读" if not session_config.get('httpOnly') else "HttpOnly"
+                        logger.info(f"设置SESSION cookie ({version_name}): 域={cookie_dict['domain']}")
+                        
+                        try:
+                            self.driver.add_cookie(cookie_dict)
+                            success_count += 1
+                            logger.info(f"✓ SESSION cookie设置成功 ({version_name})")
+                        except Exception as e:
+                            logger.warning(f"✗ SESSION cookie设置失败 ({version_name}): {e}")
+                            failure_count += 1
+                    
+                    continue
+                
+                # 处理其他cookie
+                cookie_dict = {
+                    'name': cookie_name,
+                    'value': cookie_value,
+                    'domain': f'.{main_domain}',
+                    'path': '/'
+                }
+                
+                # 应用特殊cookie规则
+                if cookie_name in special_cookies:
+                    special_settings = special_cookies[cookie_name]
+                    cookie_dict.update(special_settings)
+                    logger.info(f"应用特殊规则到cookie: {cookie_name}")
+                else:
+                    # 通用设置
+                    if self.driver.current_url.startswith('https://'):
+                        cookie_dict['secure'] = True
+                        cookie_dict['sameSite'] = 'Lax'
+                
+                # 从原始cookie继承属性
+                if 'domain' in cookie and cookie['domain']:
+                    cookie_dict['domain'] = cookie['domain']
+                if 'path' in cookie and cookie['path']:
+                    cookie_dict['path'] = cookie['path']
+                if 'secure' in cookie:
+                    cookie_dict['secure'] = cookie['secure']
+                if 'httpOnly' in cookie:
+                    cookie_dict['httpOnly'] = cookie['httpOnly']
+                if 'sameSite' in cookie:
+                    cookie_dict['sameSite'] = cookie['sameSite']
+                
+                # 尝试设置cookie
+                logger.info(f"设置cookie: {cookie_name}={cookie_value[:20]}... (域: {cookie_dict['domain']})")
+                
+                try:
+                    self.driver.add_cookie(cookie_dict)
+                    success_count += 1
+                    logger.info(f"✓ Cookie设置成功: {cookie_name}")
+                except Exception as e:
+                    # 如果完整设置失败，尝试简化设置
+                    logger.warning(f"完整cookie设置失败: {e}")
+                    try:
+                        simple_cookie = {
+                            'name': cookie_name,
+                            'value': cookie_value,
+                            'domain': f'.{main_domain}',
+                            'path': '/'
+                        }
+                        self.driver.add_cookie(simple_cookie)
+                        success_count += 1
+                        logger.info(f"✓ 简化cookie设置成功: {cookie_name}")
+                    except Exception as e2:
+                        logger.error(f"✗ Cookie设置完全失败: {cookie_name} - {e2}")
+                        failure_count += 1
+                        
+            except Exception as e:
+                logger.error(f"处理cookie时出错: {cookie} - {e}")
+                failure_count += 1
+        
+        logger.info(f"Cookie设置完成: 成功 {success_count}, 失败 {failure_count}")
+        
+        # 刷新页面以应用cookies
+        logger.info("刷新页面以应用cookies...")
+        self.driver.refresh()
+        time.sleep(2)
+        
+        # 验证重要cookies
+        self._verify_important_cookies()
+
+    def _verify_important_cookies(self):
+        """验证重要认证cookies是否正确设置"""
+        try:
+            current_cookies = self.driver.get_cookies()
+            cookie_dict = {cookie['name']: cookie['value'] for cookie in current_cookies}
+            
+            important_cookies = ['SESSION', 'deviceId', 'AGL_USER_ID']
+            
+            logger.info("=== 重要Cookie验证 ===")
+            for cookie_name in important_cookies:
+                if cookie_name in cookie_dict:
+                    logger.info(f"✓ {cookie_name}: {cookie_dict[cookie_name][:20]}...")
+                else:
+                    logger.warning(f"✗ {cookie_name}: 未找到")
+            
+            # 检查页面是否仍然显示未登录
+            try:
+                # 检查常见的登录指示器
+                login_indicators = [
+                    "//button[contains(text(), '登录')]",
+                    "//a[contains(text(), '登录')]",
+                    "//input[@type='password']",
+                    "//button[contains(text(), 'Login')]",
+                    "//a[contains(text(), 'Login')]"
+                ]
+                
+                login_found = False
+                for indicator in login_indicators:
+                    try:
+                        elements = self.driver.find_elements(By.XPATH, indicator)
+                        if elements:
+                            login_found = True
+                            logger.warning(f"发现登录指示器: {indicator}")
+                            break
+                    except:
+                        continue
+                
+                if not login_found:
+                    logger.info("✓ 未发现明显的登录指示器，可能已登录")
+                else:
+                    logger.warning("✗ 仍然显示未登录状态")
+                    
+            except Exception as e:
+                logger.warning(f"检查登录状态时出错: {e}")
+            
+            logger.info("=== 验证完成 ===")
+            
+        except Exception as e:
+            logger.error(f"验证cookies时出错: {e}") 

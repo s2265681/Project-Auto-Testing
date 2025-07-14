@@ -197,6 +197,18 @@ class IntentRecognizer:
                 r'项目[：:]\s*([^\s]+)',
                 r'project[：:]\s*([^\s]+)',
                 r'名称[：:]\s*([^\s]+)'
+            ],
+            'cookie': [
+                r'cookie[：:\s]*([^;\n]+(?:;[^;\n]+)*)',  # cookie: xxx;yyy;zzz
+                r'Cookie[：:\s]*([^;\n]+(?:;[^;\n]+)*)',  # Cookie: xxx;yyy;zzz
+                r'cookies[：:\s]*([^;\n]+(?:;[^;\n]+)*)',  # cookies: xxx;yyy;zzz
+                r'Cookies[：:\s]*([^;\n]+(?:;[^;\n]+)*)'  # Cookies: xxx;yyy;zzz
+            ],
+            'localstorage': [
+                r'localstorage[：:\s]*(\{[^}]+\})',  # localStorage: {...}
+                r'localStorage[：:\s]*(\{[^}]+\})',  # localStorage: {...}
+                r'local_storage[：:\s]*(\{[^}]+\})',  # local_storage: {...}
+                r'LocalStorage[：:\s]*(\{[^}]+\})'   # LocalStorage: {...}
             ]
         }
     
@@ -319,6 +331,16 @@ class IntentRecognizer:
         if project_name:
             parameters['project_name'] = project_name
         
+        # 提取cookie
+        cookies = self._extract_cookies(text)
+        if cookies:
+            parameters['cookies'] = cookies
+        
+        # 提取localStorage
+        local_storage = self._extract_localstorage(text)
+        if local_storage:
+            parameters['local_storage'] = local_storage
+        
         return parameters
     
     def _extract_urls(self, text: str) -> List[str]:
@@ -380,6 +402,49 @@ class IntentRecognizer:
             if match:
                 return match.group(1)
         
+        return None
+    
+    def _extract_cookies(self, text: str) -> Optional[str]:
+        """提取cookie字符串"""
+        for pattern in self.parameter_extractors['cookie']:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return None
+    
+    def _extract_localstorage(self, text: str) -> Optional[Dict[str, Any]]:
+        """提取localStorage对象"""
+        for pattern in self.parameter_extractors['localstorage']:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    # 尝试解析JSON格式的localStorage
+                    import json
+                    local_storage_str = match.group(1).strip()
+                    return json.loads(local_storage_str)
+                except (json.JSONDecodeError, ValueError):
+                    # 如果JSON解析失败，尝试解析简单的键值对格式
+                    try:
+                        # 处理简单的键值对格式，如 "key: value, key2: value2"
+                        local_storage_str = match.group(1).strip()
+                        result = {}
+                        
+                        # 移除大括号
+                        if local_storage_str.startswith('{') and local_storage_str.endswith('}'):
+                            local_storage_str = local_storage_str[1:-1]
+                        
+                        # 分割键值对
+                        pairs = local_storage_str.split(',')
+                        for pair in pairs:
+                            if ':' in pair:
+                                key, value = pair.split(':', 1)
+                                key = key.strip().strip('"\'')
+                                value = value.strip().strip('"\'')
+                                result[key] = value
+                        
+                        return result if result else None
+                    except:
+                        return None
         return None
     
     def _parse_url_xpath_format(self, url_string: str) -> Tuple[str, Optional[str]]:

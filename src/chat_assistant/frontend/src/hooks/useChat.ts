@@ -8,7 +8,7 @@ interface UseChatReturn {
   messages: ChatMessage[];
   isLoading: boolean;
   sessionId: string;
-  sendMessage: (content: string, device?: string) => Promise<void>;
+  sendMessage: (content: string, device?: string, cookies?: string, localStorage?: string) => Promise<void>;
   clearMessages: () => void;
   loadHistory: () => Promise<void>;
   exportHistory: () => Promise<void>;
@@ -52,7 +52,7 @@ export function useChat(): UseChatReturn {
     setMessages(prev => prev.filter(msg => msg.id !== id));
   }, []);
 
-  const sendMessage = useCallback(async (content: string, device?: string) => {
+  const sendMessage = useCallback(async (content: string, device?: string, cookies?: string, localStorage?: string) => {
     if (!content.trim() || isLoading) return;
 
     setIsLoading(true);
@@ -106,7 +106,7 @@ export function useChat(): UseChatReturn {
         message: loadingMessages[0] + (isLongTask ? ' (预计需要1-3分钟)' : '')
       });
       
-      const response: ChatResponse = await chatApi.sendMessage(content, sessionId, device);
+      const response: ChatResponse = await chatApi.sendMessage(content, sessionId, device, cookies, localStorage);
       
       // Clear loading interval
       if (loadingInterval) {

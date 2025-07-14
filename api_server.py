@@ -832,8 +832,10 @@ def chat():
         session_id = data.get('session_id')
         user_id = data.get('user_id')
         device = data.get('device', 'desktop')  # 获取设备参数，默认为desktop
+        cookies = data.get('cookies', '')  # 获取cookie参数
+        localStorage = data.get('localStorage', '')  # 获取localStorage参数
         
-        logger.info(f"处理聊天消息: message={message[:50]}..., session_id={session_id}, device={device}")
+        logger.info(f"处理聊天消息: message={message[:50]}..., session_id={session_id}, device={device}, cookies={bool(cookies)}, localStorage={bool(localStorage)}")
         
         # 检查聊天助手是否初始化
         if chat_assistant is None:
@@ -842,8 +844,8 @@ def chat():
                 "error": "聊天助手未初始化，请检查服务器配置"
             }), 500
         
-        # 处理消息，传递设备参数
-        response = chat_assistant.process_message(message, session_id, user_id, device)
+        # 处理消息，传递所有参数
+        response = chat_assistant.process_message(message, session_id, user_id, device, cookies, localStorage)
         
         logger.info(f"聊天消息处理完成: session_id={response.get('session_id')}, success={response.get('success')}")
         
