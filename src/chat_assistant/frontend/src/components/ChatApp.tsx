@@ -32,6 +32,7 @@ const ChatApp: React.FC<ChatAppProps> = ({
   const [showInfo, setShowInfo] = useState(false);
   const [showTimestamps, setShowTimestamps] = useState(false);
   const [showMetadata, setShowMetadata] = useState(false);
+  const [isFunctionalTestMode, setIsFunctionalTestMode] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when messages change
@@ -43,10 +44,17 @@ const ChatApp: React.FC<ChatAppProps> = ({
 
   const welcomeExamples = [
     {
+      title: "功能测试",
+      description: "执行网页功能测试，支持点击、输入等操作验证",
+      input: "functional_test_mode",
+      icon: "🧪",
+      isSpecialMode: true
+    },
+    {
       title: "生成测试用例",
       description: "为网站或应用生成自动化测试用例",
       input: "帮我生成一个登录页面的测试用例",
-      icon: "🧪"
+      icon: "📝"
     },
     {
       title: "视觉对比测试",
@@ -69,7 +77,11 @@ const ChatApp: React.FC<ChatAppProps> = ({
   ];
 
   const handleExampleClick = (input: string) => {
-    sendMessage(input, 'desktop'); // 示例使用默认桌面设备
+    if (input === 'functional_test_mode') {
+      setIsFunctionalTestMode(true);
+    } else {
+      sendMessage(input, 'desktop'); // 示例使用默认桌面设备
+    }
   };
 
   const handleRetry = () => {
@@ -251,6 +263,8 @@ const ChatApp: React.FC<ChatAppProps> = ({
         onSendMessage={sendMessage}
         isLoading={isLoading}
         disabled={loadingState.isLoading}
+        isFunctionalTestMode={isFunctionalTestMode}
+        onExitFunctionalTestMode={() => setIsFunctionalTestMode(false)}
       />
     </div>
   );

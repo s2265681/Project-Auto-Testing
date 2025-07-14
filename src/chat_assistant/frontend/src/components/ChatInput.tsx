@@ -9,6 +9,8 @@ interface ChatInputProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  isFunctionalTestMode?: boolean;
+  onExitFunctionalTestMode?: () => void;
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
@@ -17,6 +19,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
   placeholder = "输入您的问题...",
   className,
   disabled = false,
+  isFunctionalTestMode = false,
+  onExitFunctionalTestMode,
 }) => {
   const [message, setMessage] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -55,15 +59,21 @@ const ChatInput: React.FC<ChatInputProps> = ({
     const trimmedMessage = message.trim();
     if (!trimmedMessage || isLoading || disabled) return;
 
+    // 在功能测试模式下，添加特殊标识
+    let finalMessage = trimmedMessage;
+    if (isFunctionalTestMode) {
+      finalMessage = `[FUNCTIONAL_TEST] ${trimmedMessage}`;
+    }
+
     // 传递所有参数到后端
-    onSendMessage(trimmedMessage, selectedDevice, cookies, localStorage);
+    onSendMessage(finalMessage, selectedDevice, cookies, localStorage);
     setMessage('');
     
     // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-  }, [message, isLoading, disabled, selectedDevice, cookies, localStorage, onSendMessage]);
+  }, [message, isLoading, disabled, selectedDevice, cookies, localStorage, onSendMessage, isFunctionalTestMode]);
 
   const handleKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -109,6 +119,43 @@ const ChatInput: React.FC<ChatInputProps> = ({
       "flex flex-col gap-2 p-4 bg-white border-t border-gray-200",
       className
     )}>
+      {/* Functional Test Mode Panel */}
+      {isFunctionalTestMode && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-blue-600 text-lg">🧪</span>
+              <span className="font-medium text-blue-900">功能测试模式</span>
+            </div>
+            <button
+              onClick={onExitFunctionalTestMode}
+              className="text-blue-600 hover:text-blue-800 text-sm underline"
+            >
+              退出测试模式
+            </button>
+          </div>
+          
+          <div className="bg-white rounded-md p-3 text-sm">
+            <div className="font-medium text-gray-900 mb-2">📝 测试用例格式示例：</div>
+            <div className="bg-gray-50 rounded p-2 font-mono text-xs space-y-1">
+              <div className="text-blue-600">测试移动端修改用户名功能</div>
+              <div className="text-gray-600">测试用例</div>
+              <div>页面 https://staging.kalodata.com/settings</div>
+              <div>点击位置 /html/body/div/div/div/div/div/div/div[2]/div[1]/div/div[1]</div>
+              <div className="text-gray-600">期待 唤起弹窗</div>
+              <div>修改 [选择器] 这个input 的值为test</div>
+              <div>点击确认按钮 [选择器]</div>
+              <div>期待调用 /user/modifyProfile 接口</div>
+              <div>检查元素名称 [选择器] 为"test"</div>
+              <div className="text-gray-600">完成测试</div>
+            </div>
+            <div className="mt-2 text-xs text-gray-600">
+              💡 支持操作：页面导航、点击、输入、等待。支持验证：DOM元素、网络接口、页面状态
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Device Selector and Advanced Options */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -262,7 +309,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             onChange={(e) => setMessage(e.target.value)}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
-            placeholder={placeholder}
+            placeholder={isFunctionalTestMode ? "请按照上方格式输入功能测试用例..." : placeholder}
             disabled={disabled || isLoading}
             className={cn(
               "chat-input resize-none pr-12",

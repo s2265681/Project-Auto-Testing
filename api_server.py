@@ -183,6 +183,11 @@ def chat_page():
     """聊天页面"""
     return send_from_directory('static', 'chat.html')
 
+@app.route('/test-functional')
+def test_functional_page():
+    """功能测试演示页面"""
+    return send_from_directory('.', 'test_functional_ui.html')
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """健康检查端点"""

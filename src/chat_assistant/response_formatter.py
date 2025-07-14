@@ -76,6 +76,8 @@ class ResponseFormatter:
             return self._format_projects_response(result)
         elif intent_type == IntentType.HEALTH_CHECK:
             return self._format_health_check_response(result)
+        elif intent_type == IntentType.FUNCTIONAL_TEST:
+            return self._format_functional_test_response(result)
         elif intent_type == IntentType.HELP:
             return result.message  # 帮助消息已经格式化好了
         else:
@@ -357,31 +359,75 @@ class ResponseFormatter:
             return None
     
     def _get_fallback_base_url(self) -> str:
-        """获取fallback的base URL，始终带5001端口"""
+        """获取fallback的base URL"""
         # 优先从环境变量获取
-        env_url = os.getenv('SERVER_BASE_URL')
+        env_url = os.getenv('BASE_URL') or os.getenv('SERVER_BASE_URL')
         if env_url:
             return env_url
         
         # 检查是否在本地开发环境
         if self._is_local_development():
-            return 'http://localhost:5001'
+            port = os.getenv("PORT", "5000")
+            return f'http://localhost:{port}'
         
-        # 生产环境默认值，始终带5001端口
-        return 'http://18.141.179.222:5001'
+        # 生产环境默认值
+        return 'http://18.141.179.222:5000'
     
     def _is_local_development(self) -> bool:
-        """检查是否在本地开发环境"""
-        # 检查常见的本地开发环境指标
-        local_indicators = [
-            os.getenv('FLASK_ENV') == 'development',
-            os.getenv('ENVIRONMENT') == 'local',
-            os.getenv('DEBUG') == 'True',
-            # 检查是否在常见的本地开发路径
-            any(path in os.getcwd().lower() for path in ['desktop', 'documents', 'github', 'workspace', 'dev']),
+        """智能判断是否为开发环境"""
+        # 1. 检查明确的环境变量
+        if (os.getenv("FLASK_ENV") == "development" or
+            os.getenv("ENVIRONMENT") == "development" or
+            os.getenv("NODE_ENV") == "development"):
+            return True
+        
+        # 2. 检查开发环境标识文件
+        if os.path.exists("/.dev_environment"):
+            return True
+        
+        # 3. 检查当前工作目录是否包含开发环境的标识
+        current_dir = os.getcwd().lower()
+        dev_indicators = [
+            "desktop", "documents", "github", "workspace", "dev", "development",
+            "local", "project", "code", "src", "home", "users"
         ]
         
-        return any(local_indicators)
+        for indicator in dev_indicators:
+            if indicator in current_dir:
+                return True
+        
+        # 4. 检查是否存在开发环境的文件/目录
+        dev_files = [
+            "venv", ".venv", "node_modules", ".git", "requirements.txt", 
+            "package.json", "Pipfile", "pyproject.toml", ".env", ".env.local"
+        ]
+        
+        for file in dev_files:
+            if os.path.exists(file):
+                return True
+        
+        # 5. 检查Python虚拟环境
+        import sys
+        if (os.getenv("VIRTUAL_ENV") or 
+            os.getenv("CONDA_DEFAULT_ENV") or 
+            hasattr(sys, 'real_prefix') or 
+            (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)):
+            return True
+        
+        # 6. 检查是否在本地网络环境中
+        try:
+            import socket
+            hostname = socket.gethostname()
+            if ("local" in hostname.lower() or 
+                "dev" in hostname.lower() or 
+                hostname.startswith("mac") or 
+                hostname.startswith("pc")):
+                return True
+        except:
+            pass
+        
+        # 默认为生产环境
+        return False
     
     def _format_full_workflow_response(self, result: ExecutionResult) -> str:
         """格式化完整工作流响应"""
@@ -542,4 +588,9 @@ class ResponseFormatter:
             for key, value in parameters.items():
                 response += f"- {key}: `{value}`\n"
         
-        return response 
+        return response
+    
+    def _format_functional_test_response(self, result: ExecutionResult) -> str:
+        """格式化功能测试响应"""
+        # 直接返回原始消息，保留Markdown链接格式
+        return result.message 

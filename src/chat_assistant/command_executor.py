@@ -23,6 +23,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from src.workflow.executor import WorkflowExecutor
 from src.chat_assistant.intent_recognizer import Intent, IntentType
+from src.functional_testing.test_manager import FunctionalTestManager
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,9 @@ class CommandExecutor:
         # 初始化Gemini模型
         self.gemini_model = None
         self._init_gemini_model()
+        
+        # 初始化功能测试管理器
+        self.functional_test_manager = FunctionalTestManager()
         
         # 默认配置
         self.default_config = {
@@ -111,6 +115,79 @@ class CommandExecutor:
             logger.error(f"Gemini模型初始化失败: {e}")
             self.gemini_model = None
     
+    def _get_base_url(self) -> str:
+        """获取基础URL，根据环境自动判断"""
+        # 检查环境变量
+        env_base_url = os.getenv("BASE_URL") or os.getenv("SERVER_BASE_URL")
+        if env_base_url:
+            return env_base_url
+        
+        # 检查是否是开发环境
+        is_dev = self._is_development_environment()
+        
+        if is_dev:
+            # 开发环境，检查端口
+            port = os.getenv("PORT", "5001")
+            return f"http://localhost:{port}"
+        else:
+            # 生产环境
+            return "http://18.141.179.222:5001"
+    
+    def _is_development_environment(self) -> bool:
+        """智能判断是否为开发环境"""
+        # 1. 检查明确的环境变量
+        if (os.getenv("FLASK_ENV") == "development" or
+            os.getenv("ENVIRONMENT") == "development" or
+            os.getenv("NODE_ENV") == "development"):
+            return True
+        
+        # 2. 检查开发环境标识文件
+        if os.path.exists("/.dev_environment"):
+            return True
+        
+        # 3. 检查当前工作目录是否包含开发环境的标识
+        current_dir = os.getcwd().lower()
+        dev_indicators = [
+            "desktop", "documents", "github", "workspace", "dev", "development",
+            "local", "project", "code", "src", "home", "users"
+        ]
+        
+        for indicator in dev_indicators:
+            if indicator in current_dir:
+                return True
+        
+        # 4. 检查是否存在开发环境的文件/目录
+        dev_files = [
+            "venv", ".venv", "node_modules", ".git", "requirements.txt", 
+            "package.json", "Pipfile", "pyproject.toml", ".env", ".env.local"
+        ]
+        
+        for file in dev_files:
+            if os.path.exists(file):
+                return True
+        
+        # 5. 检查Python虚拟环境
+        if (os.getenv("VIRTUAL_ENV") or 
+            os.getenv("CONDA_DEFAULT_ENV") or 
+            hasattr(sys, 'real_prefix') or 
+            (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)):
+            return True
+        
+        # 6. 检查是否在本地网络环境中
+        try:
+            import socket
+            hostname = socket.gethostname()
+            if ("local" in hostname.lower() or 
+                "dev" in hostname.lower() or 
+                hostname.startswith("mac") or 
+                hostname.startswith("pc")):
+                return True
+        except:
+            pass
+        
+        # 默认为生产环境
+        return False
+    
     def execute_intent(self, intent: Intent, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
         """执行意图"""
         start_time = datetime.now()
@@ -123,6 +200,8 @@ class CommandExecutor:
                 result = self._execute_visual_comparison(intent, context)
             elif intent.type == IntentType.FULL_WORKFLOW:
                 result = self._execute_full_workflow(intent, context)
+            elif intent.type == IntentType.FUNCTIONAL_TEST:
+                result = self._execute_functional_test(intent, context)
             elif intent.type == IntentType.CHECK_STATUS:
                 result = self._execute_check_status(intent, context)
             elif intent.type == IntentType.VIEW_REPORTS:
@@ -259,6 +338,95 @@ class CommandExecutor:
             return ExecutionResult(
                 success=False,
                 message=f"视觉对比失败: {str(e)}",
+                error=str(e)
+            )
+    
+    def _execute_functional_test(self, intent: Intent, context: Optional[Dict[str, Any]]) -> ExecutionResult:
+        """执行功能测试"""
+        try:
+            # 获取参数
+            parameters = intent.parameters
+            device = context.get('device', 'mobile') if context else 'mobile'
+            cookies = context.get('cookies', '') if context else ''
+            localStorage = context.get('localStorage', '') if context else ''
+            
+            # 检查是否有测试用例描述
+            if 'test_description' in parameters:
+                test_description = parameters['test_description']
+            else:
+                # 如果没有明确的测试用例描述，使用原始文本
+                test_description = intent.raw_text
+            
+            # 提取URL
+            urls = parameters.get('urls', [])
+            if not urls:
+                return ExecutionResult(
+                    success=False,
+                    message="未找到测试URL，请提供要测试的网站地址"
+                )
+            
+            base_url = urls[0]
+            
+            # 创建测试配置
+            config = self.functional_test_manager.create_test_config(
+                base_url=base_url,
+                device=device,
+                cookies=cookies,
+                local_storage=localStorage,
+                headless=True
+            )
+            
+            # 判断是否运行演示测试
+            if any(keyword in intent.raw_text.lower() for keyword in ['demo', '演示', '示例']):
+                # 运行演示测试用例
+                result = self.functional_test_manager.run_demo_test(config)
+            else:
+                # 运行自定义测试用例
+                result = self.functional_test_manager.run_test_from_description(test_description, config)
+            
+            if result['success']:
+                message = f"🎉 功能测试执行成功！\n\n"
+                message += f"📋 测试用例: {result['test_case']['name']}\n"
+                message += f"📊 执行结果: {result['result']['status'].upper()}\n"
+                message += f"⏱️ 耗时: {result['result']['duration']:.2f}秒\n"
+                message += f"✅ 步骤通过: {result['result']['steps_passed']}/{result['test_case']['steps_count']}\n"
+                message += f"🔍 断言通过: {result['result']['assertions_passed']}/{result['test_case']['assertions_count']}\n"
+                
+                if result['result']['error']:
+                    message += f"❌ 错误信息: {result['result']['error']}\n"
+                
+                # 生成可点击的报告链接
+                if result['report_path']:
+                    base_url = self._get_base_url()
+                    report_url = f"{base_url}/files/{result['report_path']}"
+                    message += f"📄 详细报告: [点击查看HTML报告]({report_url})\n"
+                
+                # 生成可点击的截图链接
+                if result['screenshots']:
+                    base_url = self._get_base_url()
+                    message += f"📸 截图: {len(result['screenshots'])} 张\n"
+                    for i, screenshot in enumerate(result['screenshots'], 1):
+                        screenshot_url = f"{base_url}/files/{screenshot}"
+                        message += f"   • [截图 {i}]({screenshot_url})\n"
+                
+                return ExecutionResult(
+                    success=True,
+                    message=message,
+                    data=result
+                )
+            else:
+                return ExecutionResult(
+                    success=False,
+                    message=f"功能测试执行失败: {result['error']}",
+                    error=result.get('error', ''),
+                    data=result
+                )
+                
+        except Exception as e:
+            logger.error(f"功能测试执行失败: {e}")
+            return ExecutionResult(
+                success=False,
+                message=f"功能测试执行失败: {str(e)}",
                 error=str(e)
             )
     

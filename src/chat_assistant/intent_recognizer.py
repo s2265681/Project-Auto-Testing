@@ -22,6 +22,7 @@ class IntentType(Enum):
     GENERATE_TEST_CASES = "generate_test_cases"
     VISUAL_COMPARISON = "visual_comparison"
     FULL_WORKFLOW = "full_workflow"
+    FUNCTIONAL_TEST = "functional_test"
     
     # 查询相关
     CHECK_STATUS = "check_status"
@@ -108,6 +109,31 @@ class IntentRecognizer:
                 r'full.*workflow',
                 r'complete.*test',
                 r'full.*test'
+            ],
+            
+            IntentType.FUNCTIONAL_TEST: [
+                r'功能测试',
+                r'自动化测试',
+                r'执行.*测试',
+                r'运行.*测试',
+                r'测试.*功能',
+                r'functional.*test',
+                r'automation.*test',
+                r'run.*test',
+                r'execute.*test',
+                r'测试.*用例',
+                r'测试.*移动端',
+                r'测试.*PC端',
+                r'测试.*桌面端',
+                r'移动端.*测试',
+                r'PC端.*测试',
+                r'桌面端.*测试',
+                r'点击.*测试',
+                r'输入.*测试',
+                r'页面.*测试',
+                r'演示.*测试',
+                r'demo.*test',
+                r'test.*demo'
             ],
             
             IntentType.CHECK_STATUS: [
@@ -215,6 +241,18 @@ class IntentRecognizer:
     def recognize_intent(self, text: str) -> Intent:
         """识别用户输入的意图"""
         original_text = text.strip()  # 保存原始文本用于参数提取
+        
+        # 检查是否是功能测试模式
+        if original_text.startswith('[FUNCTIONAL_TEST]'):
+            actual_text = original_text.replace('[FUNCTIONAL_TEST]', '').strip()
+            parameters = self._extract_parameters(actual_text)
+            return Intent(
+                type=IntentType.FUNCTIONAL_TEST,
+                confidence=1.0,
+                parameters={**parameters, 'test_description': actual_text},
+                raw_text=actual_text
+            )
+        
         normalized_text = original_text.lower()  # 小写文本用于意图识别
         
         # 尝试匹配各种意图模式
@@ -274,6 +312,9 @@ class IntentRecognizer:
         """从文本中提取参数"""
         parameters = {}
         
+        # 初始化XPath提取状态
+        self._extracted_xpath = None
+        
         # 提取URL
         urls = self._extract_urls(text)
         if urls:
@@ -303,6 +344,10 @@ class IntentRecognizer:
                     if xpath:
                         parameters['xpath_selector'] = xpath
             
+            # 如果从URL提取过程中发现了XPath，使用它
+            if self._extracted_xpath:
+                parameters['xpath_selector'] = self._extracted_xpath
+            
             if figma_urls:
                 parameters['figma_url'] = figma_urls[0]
             if website_urls:
@@ -315,6 +360,27 @@ class IntentRecognizer:
                 parameters['website_url'] = processed_url
                 if xpath:
                     parameters['xpath_selector'] = xpath
+        
+        # 额外的XPath提取（从文本中直接提取XPath模式）
+        if not parameters.get('xpath_selector'):
+            xpath_patterns = [
+                r'(/html/body[^\s\u4e00-\u9fff]*)',  # 匹配以/html/body开头的XPath，排除中文字符
+                r'(//[a-zA-Z]+[^\s\u4e00-\u9fff]*)',  # 匹配以//开头的XPath，排除中文字符
+            ]
+            
+            for pattern in xpath_patterns:
+                matches = re.findall(pattern, text)
+                if matches:
+                    # 进一步清理XPath，确保只包含有效字符
+                    xpath = matches[0]
+                    # 移除XPath中的中文字符和其后的内容
+                    cleaned_xpath = re.sub(r'[\u4e00-\u9fff].*$', '', xpath)
+                    if cleaned_xpath and cleaned_xpath != xpath:
+                        parameters['xpath_selector'] = cleaned_xpath
+                        break
+                    else:
+                        parameters['xpath_selector'] = xpath
+                        break
         
         # 提取文档token
         doc_tokens = self._extract_document_tokens(text)
@@ -346,9 +412,33 @@ class IntentRecognizer:
     def _extract_urls(self, text: str) -> List[str]:
         """提取URL"""
         urls = []
+        
+        # 首先尝试处理格式如 "https://example.com/path 点击位置 /html/body/div[1]" 这样的输入
+        # 这种格式需要特殊处理来分离URL和XPath
+        
+        # 匹配URL后面跟着中文的情况
+        url_with_chinese_pattern = r'(https?://[^\s\u4e00-\u9fff]+)[\u4e00-\u9fff]*.*?(/html/body[^\s\u4e00-\u9fff]*)'
+        matches = re.findall(url_with_chinese_pattern, text, re.IGNORECASE)
+        for match in matches:
+            url_part = match[0]
+            xpath_part = match[1] if match[1] else None
+            urls.append(url_part)
+            if xpath_part:
+                # 清理XPath，确保不包含中文字符
+                cleaned_xpath = re.sub(r'[\u4e00-\u9fff].*$', '', xpath_part)
+                self._extracted_xpath = cleaned_xpath if cleaned_xpath else xpath_part
+        
+        # 然后使用原有的URL提取逻辑
         for pattern in self.parameter_extractors['url']:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            urls.extend(matches)
+            pattern_matches = re.findall(pattern, text, re.IGNORECASE)
+            for match in pattern_matches:
+                # 清理URL，去掉中文字符后的部分
+                cleaned_url = re.sub(r'[\u4e00-\u9fff].*$', '', match)
+                if cleaned_url and cleaned_url != match:
+                    urls.append(cleaned_url)
+                else:
+                    urls.append(match)
+        
         return list(set(urls))  # 去重
     
     def _extract_document_tokens(self, text: str) -> List[str]:
